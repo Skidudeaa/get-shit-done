@@ -155,6 +155,132 @@ If you prefer not to use that flag, add this to your project's `.claude/settings
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git tag:*)"
+
+## codebase-intel
+
+Dense reference for the global-tool + per-repo-state model.
+
+### Invariant
+- **Tooling** lives once (global install or linked repo).
+- **State** lives per repo under `.planning/intel/`.
+- **Claude hook** is generic (runs global CLI in repo CWD).
+- **Watch/rescan** works per-repo or multi-repo.
+
+---
+
+## Install (global dev link)
+From the tool repo (this repo):
+
+```bash
+npm install
+npm link
+command -v codebase-intel
+```
+
+If `codebase-intel` is not on PATH for systemd or Claude Code, use the absolute path from `command -v codebase-intel`.
+
+---
+
+## Per-repo quickstart
+From any repo you want indexed:
+
+```bash
+codebase-intel init
+codebase-intel rescan
+codebase-intel summary
+codebase-intel watch
+```
+
+Creates/ensures:
+
+```
+.planning/intel/graph.db
+.planning/intel/index.json
+.planning/intel/summary.md
+.claude/settings.json
+```
+
+`summary.md` is empty until you scan/rescan.
+
+---
+
+## CLI reference
+
+```
+codebase-intel init [--root <path> | --roots <a,b> | --roots-file <file>]
+codebase-intel scan [--root/--roots/--roots-file]
+codebase-intel rescan [--root/--roots/--roots-file]
+codebase-intel update --file <relPath> [--root <path>]
+codebase-intel watch [--root/--roots/--roots-file] [--summary-every <sec>]
+codebase-intel summary [--root <path>]
+codebase-intel health [--root <path>]
+codebase-intel query <imports|dependents|exports> --file <relPath> [--root <path>]
+codebase-intel hook sessionstart
+codebase-intel inject
+```
+
+Notes:
+- `scan` indexes files; `rescan` also prunes missing files under the static glob prefixes.
+- `update` is for a single file (used by watchers).
+- `watch` accepts multiple roots for a single daemon process.
+- `hook sessionstart` reads JSON on stdin (Claude Code SessionStart payload) and outputs the `<codebase-intelligence>` block.
+- `inject` is a manual wrapper that prints the same block without stdin filtering.
+
+---
+
+## Repo config (optional)
+Create `.codebase-intel.json` in each repo to control globs/ignore/throttle.
+
+```json
+{
+  "globs": [
+    "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+    "lib/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+    "app/**/*.{ts,tsx,js,jsx,mjs,cjs}"
+  ],
+  "ignore": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.planning/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**"
+  ],
+  "summaryEverySec": 5
+}
+```
+
+Defaults are applied when keys are missing.
+
+---
+
+## State layout
+All state is per-repo and lives under `.planning/intel/`:
+
+- `graph.db` (SQLite): files + imports/exports graph
+- `index.json`: per-file imports/exports + file metadata
+- `summary.md`: human-readable summary injected into Claude
+
+`codebase-intel init` will create the directory and seed empty files.
+
+---
+
+## Claude Code SessionStart hook
+`codebase-intel init` ensures `.claude/settings.json` contains:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codebase-intel hook sessionstart"
+          }
+        ]
+      }
     ]
   }
 }
@@ -516,6 +642,131 @@ Use `/gsd:settings` to toggle these, or override per-invocation:
 | `parallelization.enabled` | `true` | Run independent plans simultaneously |
 | `planning.commit_docs` | `true` | Track `.planning/` in git |
 
+If Claude Code can’t find the global bin on PATH, replace the command with the absolute path to `codebase-intel`.
+
+---
+
+## Watcher (single or multi-root)
+Single repo:
+
+```bash
+codebase-intel watch --root /path/to/repo
+```
+
+Multiple repos:
+
+```bash
+codebase-intel watch --roots /r/one,/r/two,/r/three
+```
+
+From a file list:
+
+```bash
+codebase-intel watch --roots-file ~/.config/codebase-intel/roots.txt
+```
+
+`--summary-every <sec>` throttles summary regeneration across bursts (per root).
+
+---
+
+## systemd (user services)
+Per-repo watcher/rescan (template units in `systemd/`):
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now codebase-intel-watcher@/path/to/repo.service
+systemctl --user enable --now codebase-intel-rescan@/path/to/repo.timer
+```
+
+Multi-repo example (single watcher + nightly rescan):
+
+```
+~/.config/codebase-intel/roots.txt
+```
+
+```
+/home/you/repo1
+/home/you/repo2
+/home/you/repo3
+```
+
+User service:
+
+```
+~/.config/systemd/user/codebase-intel-watch.service
+```
+
+```
+[Unit]
+Description=codebase-intel multi-repo watcher
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env codebase-intel watch --roots-file %h/.config/codebase-intel/roots.txt
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Rescan service + timer:
+
+```
+~/.config/systemd/user/codebase-intel-rescan.service
+```
+
+```
+[Unit]
+Description=codebase-intel nightly rescan (multi-repo)
+
+[Service]
+Type=oneshot
+Environment=INTEL_SUMMARY_THROTTLE_MS=0
+ExecStart=/usr/bin/env codebase-intel rescan --roots-file %h/.config/codebase-intel/roots.txt
+```
+
+```
+~/.config/systemd/user/codebase-intel-rescan.timer
+```
+
+```
+[Unit]
+Description=Run codebase-intel rescan nightly
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now codebase-intel-watch.service
+systemctl --user enable --now codebase-intel-rescan.timer
+```
+
+If `/usr/bin/env codebase-intel` fails under systemd, replace with the absolute path.
+
+---
+
+## Queries
+All query paths are **repo-relative**:
+
+```bash
+codebase-intel query imports --file src/app.ts
+codebase-intel query exports --file src/app.ts
+codebase-intel query dependents --file src/app.ts
+```
+
+---
+
+## Environment variables
+- `INTEL_SUMMARY_THROTTLE_MS`: override summary throttling (used in watch/rescan contexts). Setting to `0` forces immediate summary writes.
+
 ---
 
 ## Troubleshooting
@@ -566,3 +817,31 @@ MIT License. See [LICENSE](LICENSE) for details.
 **Claude Code is powerful. GSD makes it reliable.**
 
 </div>
+
+- **No summary output**: run `codebase-intel rescan` in the repo.
+- **Wrong roots**: `--root` uses a single repo; `--roots` uses a comma list; `--roots-file` is newline-separated.
+- **Hook not running**: verify `.claude/settings.json` and PATH for `codebase-intel`.
+- **Watcher not seeing files**: adjust `globs` in `.codebase-intel.json`.
+- **Summary too slow**: increase `summaryEverySec` or set `INTEL_SUMMARY_THROTTLE_MS`.
+
+---
+
+## Data model (short)
+- `graph.db`: SQLite tables for `files`, `imports`, `exports`, `meta`.
+- `index.json`: per-file `{ type, sizeBytes, mtimeMs, updatedAtMs, imports[], exports[] }`.
+- `summary.md`: Markdown summary, regenerated on scan/rescan or throttled watch updates.
+
+---
+
+## Uninstall
+Remove tool link:
+
+```bash
+npm unlink
+```
+
+Remove per-repo state:
+
+```bash
+rm -rf .planning/intel .claude/settings.json
+```
