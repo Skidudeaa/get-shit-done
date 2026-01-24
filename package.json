@@ -1,45 +1,16 @@
 {
-  "name": "get-shit-done-cc",
-  "version": "1.9.4",
-  "description": "A meta-prompting, context engineering and spec-driven development system for Claude Code by TÂCHES.",
+  "name": "codebase-intel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "lib/intel.js",
   "bin": {
-    "get-shit-done-cc": "bin/install.js"
+    "codebase-intel": "bin/intel.js"
   },
-  "files": [
-    "bin",
-    "commands",
-    "get-shit-done",
-    "agents",
-    "hooks/dist",
-    "scripts"
-  ],
-  "keywords": [
-    "claude",
-    "claude-code",
-    "ai",
-    "meta-prompting",
-    "context-engineering",
-    "spec-driven-development"
-  ],
-  "author": "TÂCHES",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/glittercowboy/get-shit-done.git"
-  },
-  "homepage": "https://github.com/glittercowboy/get-shit-done",
-  "bugs": {
-    "url": "https://github.com/glittercowboy/get-shit-done/issues"
-  },
-  "engines": {
-    "node": ">=16.7.0"
-  },
-  "dependencies": {},
-  "devDependencies": {
-    "esbuild": "^0.24.0"
-  },
-  "scripts": {
-    "build:hooks": "node scripts/build-hooks.js",
-    "prepublishOnly": "npm run build:hooks"
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "fast-glob": "^3.3.2",
+    "sql.js": "^1.12.0"
   }
 }
+

@@ -1,0 +1,8 @@
+[Unit]
+Description=codebase-intel rescan (%i)
+
+[Service]
+Type=oneshot
+Environment=INTEL_SUMMARY_THROTTLE_MS=0
+ExecStart=/usr/bin/env codebase-intel rescan --root %i
+

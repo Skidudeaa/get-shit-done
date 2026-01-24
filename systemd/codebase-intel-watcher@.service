@@ -1,0 +1,11 @@
+[Unit]
+Description=codebase-intel watcher (%i)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env codebase-intel watch --root %i
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+

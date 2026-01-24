@@ -1,13 +1,6 @@
 node_modules/
-package-lock.json
+*.log
 .DS_Store
-TO-DOS.md
-CLAUDE.md
-/research.claude/
-commands.html
 
-# Local test installs
-.claude/
-
-# Build artifacts (committed to npm, not git)
-hooks/dist/
+# Per-repo state (generated, not checked in)
+.planning/intel/

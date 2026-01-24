@@ -1,0 +1,11 @@
+[Unit]
+Description=Run codebase-intel rescan nightly (%i)
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+Unit=codebase-intel-rescan@%i.service
+
+[Install]
+WantedBy=timers.target
+
