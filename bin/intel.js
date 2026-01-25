@@ -4,12 +4,18 @@ const fs = require("fs");
 const path = require("path");
 
 const intel = require("../lib/intel");
+const { retrieve } = require("../lib/retrieve");
+const zoekt = require("../lib/zoekt");
 
 function flag(argv, name) {
   const i = argv.indexOf(name);
   if (i === -1) return null;
   const v = argv[i + 1];
   return v && !v.startsWith("--") ? v : null;
+}
+
+function hasFlag(argv, name) {
+  return argv.includes(name);
 }
 
 function readRootsFile(p) {
@@ -92,7 +98,9 @@ function usage(exitCode = 1) {
   codebase-intel health [--root <path>]
   codebase-intel query <imports|dependents|exports> --file <relPath> [--root <path>]
   codebase-intel hook sessionstart
-  codebase-intel inject`);
+  codebase-intel inject
+  codebase-intel retrieve <query>
+  codebase-intel zoekt <index|serve|search>`);
   process.exit(exitCode);
 }
 
@@ -205,6 +213,120 @@ function usage(exitCode = 1) {
       break;
     }
 
+    case "retrieve": {
+      const r = roots[0];
+      const boolFlags = new Set(["--explain-hits", "--zoekt-build"]);
+      const parts = [];
+      for (let i = 1; i < argv.length; i += 1) {
+        const a = argv[i];
+        if (a.startsWith("--")) {
+          if (boolFlags.has(a)) continue;
+          i += 1;
+          continue;
+        }
+        parts.push(a);
+      }
+      const q = parts.join(" ").trim();
+      if (!q) {
+        console.error(
+          "Usage: codebase-intel retrieve <query> [--backend auto|zoekt|rg] [--context N] [--max-hits N] [--max-files N] [--expand imports,dependents] [--max-related N] [--hits-per-file N] [--explain-hits] [--rerank-min-resolution N] [--zoekt-build] [--zoekt-port N]"
+        );
+        process.exit(1);
+      }
+
+      const backend = flag(process.argv, "--backend");
+      const contextLines = parseInt(flag(process.argv, "--context") || "", 10);
+      const maxHits = parseInt(flag(process.argv, "--max-hits") || "", 10);
+      const maxFiles = parseInt(flag(process.argv, "--max-files") || "", 10);
+      const maxRelated = parseInt(flag(process.argv, "--max-related") || "", 10);
+      const hitsPerFile = parseInt(flag(process.argv, "--hits-per-file") || "", 10);
+      const rerankMinResolution = parseInt(flag(process.argv, "--rerank-min-resolution") || "", 10);
+      const expandRaw = flag(process.argv, "--expand");
+      const zoektPort = parseInt(flag(process.argv, "--zoekt-port") || "", 10);
+
+      const out = await retrieve(r, q, {
+        backend: backend || "auto",
+        contextLines: Number.isFinite(contextLines) ? contextLines : 1,
+        maxHits: Number.isFinite(maxHits) ? maxHits : 50,
+        maxSeedFiles: Number.isFinite(maxFiles) ? maxFiles : 10,
+        expand: expandRaw
+          ? expandRaw
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : ["imports", "dependents"],
+        maxRelated: Number.isFinite(maxRelated) ? maxRelated : 30,
+        hitsPerFileCap: Number.isFinite(hitsPerFile) ? hitsPerFile : 5,
+        explainHits: hasFlag(process.argv, "--explain-hits"),
+        rerankMinResolutionPct: Number.isFinite(rerankMinResolution)
+          ? rerankMinResolution
+          : 90,
+        zoektBuild: hasFlag(process.argv, "--zoekt-build"),
+        zoektPort: Number.isFinite(zoektPort) ? zoektPort : 6070,
+      });
+
+      process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+      break;
+    }
+
+    case "zoekt": {
+      const sub = argv[1];
+      const r = roots[0];
+      if (!sub) {
+        console.error("Usage: codebase-intel zoekt <index|serve|search> ...");
+        process.exit(1);
+      }
+
+      if (sub === "index") {
+        const force = hasFlag(process.argv, "--force");
+        const res = zoekt.buildIndex(r, { force });
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+        break;
+      }
+
+      if (sub === "serve") {
+        const port = parseInt(flag(process.argv, "--port") || "", 10);
+        const autoIndex = hasFlag(process.argv, "--build");
+        const res = await zoekt.ensureWebserver(r, {
+          port: Number.isFinite(port) ? port : 6070,
+          autoIndex,
+        });
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+        break;
+      }
+
+      if (sub === "search") {
+        const parts = [];
+        for (let i = 2; i < argv.length; i += 1) {
+          const a = argv[i];
+          if (a.startsWith("--")) {
+            i += 1;
+            continue;
+          }
+          parts.push(a);
+        }
+        const q = parts.join(" ").trim();
+        if (!q) {
+          console.error("Usage: codebase-intel zoekt search <query>");
+          process.exit(1);
+        }
+        const port = parseInt(flag(process.argv, "--port") || "", 10);
+        const contextLines = parseInt(flag(process.argv, "--context") || "", 10);
+        const maxHits = parseInt(flag(process.argv, "--max-hits") || "", 10);
+
+        const res = await zoekt.search(r, q, {
+          port: Number.isFinite(port) ? port : 6070,
+          contextLines: Number.isFinite(contextLines) ? contextLines : 1,
+          maxHits: Number.isFinite(maxHits) ? maxHits : 50,
+        });
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+        break;
+      }
+
+      console.error("Usage: codebase-intel zoekt <index|serve|search> ...");
+      process.exit(1);
+    }
+
     default:
       usage(1);
   }
@@ -212,4 +334,3 @@ function usage(exitCode = 1) {
   console.error(e?.stack || e?.message || String(e));
   process.exit(1);
 });
-

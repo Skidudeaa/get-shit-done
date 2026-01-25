@@ -189,6 +189,7 @@ codebase-intel init
 codebase-intel rescan
 codebase-intel summary
 codebase-intel watch
+codebase-intel retrieve "router"
 ```
 
 Creates/ensures:
@@ -217,6 +218,8 @@ codebase-intel health [--root <path>]
 codebase-intel query <imports|dependents|exports> --file <relPath> [--root <path>]
 codebase-intel hook sessionstart
 codebase-intel inject
+codebase-intel retrieve <query>
+codebase-intel zoekt <index|serve|search>
 ```
 
 Notes:
@@ -225,6 +228,9 @@ Notes:
 - `watch` accepts multiple roots for a single daemon process.
 - `hook sessionstart` reads JSON on stdin (Claude Code SessionStart payload) and outputs the `<codebase-intelligence>` block.
 - `inject` is a manual wrapper that prints the same block without stdin filtering.
+- `retrieve` runs a ranked search (rg or zoekt) and returns a stable JSON schema.
+- `zoekt` manages the optional zoekt index/daemon and can run raw searches.
+- `health` includes `resolutionPct` and `indexAgeSec` to surface drift.
 
 ---
 
@@ -262,6 +268,30 @@ All state is per-repo and lives under `.planning/intel/`:
 - `summary.md`: human-readable summary injected into Claude
 
 `codebase-intel init` will create the directory and seed empty files.
+
+---
+
+## Retrieve (ranked search)
+Example:
+
+```bash
+codebase-intel retrieve "router" --backend auto --max-hits 40 --hits-per-file 4
+```
+
+The response is a stable JSON document (`schema: codebase-intel.retrieve.v1`) containing hits,
+file-level rollups, related graph neighbors, and health metrics.
+
+---
+
+## Zoekt (optional fast search backend)
+Install zoekt (Go-based), then:
+
+```bash
+codebase-intel zoekt index
+codebase-intel retrieve "useMemo" --backend zoekt --max-hits 60 --hits-per-file 3
+```
+
+`--backend auto` will use zoekt if installed and indexed, otherwise it falls back to `rg`.
 
 ---
 
