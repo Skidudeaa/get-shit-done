@@ -137,8 +137,53 @@ function usage(exitCode = 1) {
 
   // ---- hook refresh (mid-session, on UserPromptSubmit) ----
   if (cmd === "hook" && argv[1] === "refresh") {
-    const { runRefresh } = require("../tools/codebase_intel/refresh");
-    await runRefresh();
+    const crypto = require("crypto");
+    const root = process.cwd();
+    const summaryPath = path.join(root, ".planning", "intel", "summary.md");
+
+    const data = await readStdinJson();
+
+    if (!fs.existsSync(summaryPath)) process.exit(0);
+
+    const summary = fs.readFileSync(summaryPath, "utf8").trim();
+    if (!summary) process.exit(0);
+
+    // Per-session dedupe: derive session key from hook payload or env
+    const sessionKey = (
+      data?.session_id ||
+      data?.conversation_id ||
+      data?.run_id ||
+      data?.terminal_id ||
+      process.env.CURSOR_SESSION_ID ||
+      process.env.TMUX_PANE ||
+      process.env.SSH_TTY ||
+      String(process.ppid || process.pid)
+    )
+      .toString()
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(0, 80);
+
+    const cachePath = path.join(
+      root,
+      ".planning",
+      "intel",
+      `.last_injected_hash.${sessionKey}`
+    );
+
+    const h = crypto.createHash("sha256").update(summary).digest("hex");
+    const last = fs.existsSync(cachePath)
+      ? fs.readFileSync(cachePath, "utf8").trim()
+      : "";
+
+    // Only inject if changed since last injection for this session
+    if (last === h) process.exit(0);
+
+    fs.writeFileSync(cachePath, h);
+
+    // Use same tag as SessionStart for consistency
+    process.stdout.write(
+      `<codebase-intelligence>\n(refreshed: ${new Date().toISOString()})\n${summary}\n</codebase-intelligence>`
+    );
     process.exit(0);
   }
 
