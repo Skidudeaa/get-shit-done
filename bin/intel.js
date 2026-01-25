@@ -105,6 +105,7 @@ function usage(exitCode = 1) {
   codebase-intel watch [--root/--roots/--roots-file] [--summary-every <sec>]
   codebase-intel summary [--root <path>]
   codebase-intel health [--root <path>]
+  codebase-intel doctor [--root <path>]
   codebase-intel query <imports|dependents|exports> --file <relPath> [--root <path>]
   codebase-intel hook sessionstart
   codebase-intel hook refresh
@@ -260,6 +261,89 @@ function usage(exitCode = 1) {
       const r = roots[0];
       const h = await intel.health(r);
       process.stdout.write(JSON.stringify(h, null, 2) + "\n");
+      break;
+    }
+
+    case "doctor": {
+      const r = roots[0];
+      const rootAbs = path.resolve(r);
+      const h = await intel.health(r);
+      const cfg = loadRepoConfig(r);
+
+      const lines = [];
+      lines.push("# codebase-intel doctor");
+      lines.push("");
+
+      // State files
+      lines.push("## State");
+      const stateDir = path.join(rootAbs, ".planning", "intel");
+      const graphDb = path.join(stateDir, "graph.db");
+      const indexJson = path.join(stateDir, "index.json");
+      const summaryMd = path.join(stateDir, "summary.md");
+      const claudeSettings = path.join(rootAbs, ".claude", "settings.json");
+
+      lines.push(`  state dir:       ${fs.existsSync(stateDir) ? "✓" : "✗"} ${stateDir}`);
+      lines.push(`  graph.db:        ${fs.existsSync(graphDb) ? "✓" : "✗"}`);
+      lines.push(`  index.json:      ${fs.existsSync(indexJson) ? "✓" : "✗"}`);
+      lines.push(`  summary.md:      ${fs.existsSync(summaryMd) ? "✓" : "✗"}`);
+      lines.push(`  claude settings: ${fs.existsSync(claudeSettings) ? "✓" : "✗"}`);
+      lines.push("");
+
+      // Health metrics
+      lines.push("## Health");
+      const pct = h.metrics?.resolutionPct ?? h.resolutionPct ?? 0;
+      const resolved = h.metrics?.localResolved ?? h.localResolved ?? 0;
+      const total = h.metrics?.localTotal ?? h.localTotal ?? 0;
+      const ageSec = h.metrics?.indexAgeSec ?? h.indexAgeSec ?? 0;
+      const indexed = h.metrics?.indexedFiles ?? h.index?.files ?? 0;
+
+      let healthStatus = "✓ healthy";
+      if (pct < 90) healthStatus = "✗ degraded (graph boosts gated)";
+      else if (pct < 95) healthStatus = "⚠ watch it";
+
+      lines.push(`  resolution:      ${pct}% (${resolved}/${total}) ${healthStatus}`);
+      lines.push(`  indexed files:   ${indexed}`);
+      lines.push(`  index age:       ${ageSec}s ${ageSec > 300 ? "⚠ stale (watcher not running?)" : ""}`);
+      lines.push("");
+
+      // Top misses
+      const misses = h.metrics?.topMisses ?? h.topMisses ?? [];
+      if (misses.length > 0) {
+        lines.push("## Top unresolved imports");
+        for (const [spec, count] of misses.slice(0, 5)) {
+          lines.push(`  ${spec} (${count})`);
+        }
+        lines.push("");
+      }
+
+      // Config
+      lines.push("## Config");
+      lines.push(`  globs: ${JSON.stringify(cfg.globs)}`);
+      lines.push(`  ignore: ${JSON.stringify(cfg.ignore.slice(0, 3))}${cfg.ignore.length > 3 ? "..." : ""}`);
+      lines.push("");
+
+      // Search backends
+      lines.push("## Search backends");
+      lines.push(`  rg:    ${require("child_process").spawnSync("which", ["rg"]).status === 0 ? "✓" : "✗"}`);
+      const zoektInstalled = require("child_process").spawnSync("which", ["zoekt-webserver"]).status === 0;
+      lines.push(`  zoekt: ${zoektInstalled ? "✓" : "✗ (optional)"}`);
+      lines.push("");
+
+      // Hints
+      lines.push("## Hints");
+      if (!fs.existsSync(stateDir)) {
+        lines.push("  → Run: codebase-intel init");
+      } else if (indexed === 0) {
+        lines.push("  → Run: codebase-intel scan");
+      } else if (ageSec > 300) {
+        lines.push("  → Start watcher: codebase-intel watch --summary-every 5");
+      } else if (pct < 90) {
+        lines.push("  → Check resolver / adjust globs in .codebase-intel.json");
+      } else {
+        lines.push("  ✓ System looks healthy");
+      }
+
+      process.stdout.write(lines.join("\n") + "\n");
       break;
     }
 

@@ -71,7 +71,8 @@ Claude Code will now receive codebase intelligence automatically.
 | `init` | Initialize repo state and wire Claude hooks |
 | `scan` | Full index / repair drift |
 | `watch` | Live updates (required for refresh) |
-| `health` | Show resolution %, index age |
+| `health` | Show resolution %, index age (JSON) |
+| `doctor` | Diagnose setup, health, and hints |
 | `summary` | Print injected summary |
 | `retrieve <query>` | Ranked search with graph context |
 

@@ -130,10 +130,29 @@ Use health metrics to justify changes.
 
 ---
 
+## Doctor command
+
+```bash
+codebase-intel doctor
+```
+
+Outputs:
+- State file checks (graph.db, index.json, summary.md, hooks)
+- Health metrics (resolution %, index age)
+- Top unresolved imports
+- Active config globs
+- Search backend availability (rg, zoekt)
+- Actionable hints
+
+This is the first command to run when "something feels off".
+
+---
+
 ## Debugging
 
 ```bash
-codebase-intel health                    # check metrics
+codebase-intel doctor                    # full diagnosis
+codebase-intel health                    # raw metrics (JSON)
 codebase-intel summary                   # see what Claude receives
 ls -la .planning/intel/.last_injected_hash.*  # session hashes
 ./test/test-refresh.sh                   # run regression tests
