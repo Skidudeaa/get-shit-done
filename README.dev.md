@@ -20,6 +20,8 @@ No background magic. Everything is explicit.
 ## Repo layout (core)
 
 ```
+bin/
+  intel.js          # CLI entrypoint
 lib/
   intel.js          # orchestration (init/scan/update/health)
   summary.js        # bounded summary + alerts
@@ -30,8 +32,10 @@ lib/
     javascript.js   # JS/TS extractor
     python_ast.py   # Python AST extractor
     python.js       # Node wrapper
-bin/
-  intel.js          # CLI entrypoint
+scripts/
+  setup.sh          # one-command project setup
+test/
+  test-refresh.sh   # refresh hook regression tests
 ```
 
 ---
@@ -127,6 +131,22 @@ Use health metrics to justify changes.
 - Tag releases
 - Keep JSON contracts stable
 - Prefer additive changes
+
+---
+
+## Deploying to a new project
+
+```bash
+cd /path/to/project
+/path/to/codebase-intel/scripts/setup.sh
+```
+
+The script:
+1. Checks `codebase-intel` is on PATH
+2. Runs `init` + `scan`
+3. Shows `doctor` output
+4. Adds `.planning/` to `.gitignore`
+5. Prints watcher command
 
 ---
 
