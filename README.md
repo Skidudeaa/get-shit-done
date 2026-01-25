@@ -163,7 +163,7 @@ Dense reference for the global-tool + per-repo-state model.
 ### Invariant
 - **Tooling** lives once (global install or linked repo).
 - **State** lives per repo under `.planning/intel/`.
-- **Claude hooks**: SessionStart runs the global CLI; UserPromptSubmit uses a per-repo refresh helper.
+- **Claude hooks**: SessionStart and UserPromptSubmit both run the global CLI.
 - **Watch/rescan** works per-repo or multi-repo.
 
 ---
@@ -198,8 +198,7 @@ Creates/ensures:
 .planning/intel/graph.db
 .planning/intel/index.json
 .planning/intel/summary.md
-.claude/settings.json
-tools/codebase_intel/refresh.js
+.claude/settings.json   (wires SessionStart + UserPromptSubmit hooks)
 ```
 
 `summary.md` is empty until you scan/rescan.
@@ -321,7 +320,7 @@ codebase-intel retrieve "useMemo" --backend zoekt --max-hits 60 --hits-per-file 
         "hooks": [
           {
             "type": "command",
-            "command": "node tools/codebase_intel/refresh.js"
+            "command": "codebase-intel hook refresh"
           }
         ]
       }
@@ -687,8 +686,34 @@ Use `/gsd:settings` to toggle these, or override per-invocation:
 | `planning.commit_docs` | `true` | Track `.planning/` in git |
 
 Live refresh requires a running watcher (or periodic `rescan`) so `summary.md` changes mid-session.
+If Claude Code cannot find the global bin on PATH, replace the commands with the absolute path.
 
-If Claude Code can’t find the global bin on PATH, replace the SessionStart command with the absolute path to `codebase-intel`.
+---
+
+## Live refresh
+
+Claude Code receives updated intelligence mid-session when:
+
+1. **Watcher is running** — keeps `summary.md` fresh as files change
+2. **UserPromptSubmit hook is wired** — `codebase-intel init` does this automatically
+
+**How it works:**
+- On each prompt, `hook refresh` checks if `summary.md` changed since last injection
+- If changed, re-injects the `<codebase-intelligence>` block
+- Per-session dedupe: multiple Claude sessions in the same repo will not suppress each other
+
+**Setup:**
+```bash
+cd /path/to/repo
+codebase-intel init          # wires hooks
+codebase-intel watch         # run in background (tmux, systemd, etc.)
+```
+
+**Debug:**
+```bash
+codebase-intel health
+ls -la .planning/intel/.last_injected_hash.* 2>/dev/null || echo "no session hashes"
+```
 
 ---
 
