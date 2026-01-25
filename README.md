@@ -53,6 +53,12 @@ codebase-intel --help
 
 ```bash
 cd /path/to/project
+./path/to/codebase-intel/scripts/setup.sh
+```
+
+Or manually:
+
+```bash
 codebase-intel init
 codebase-intel scan
 codebase-intel watch --summary-every 5
