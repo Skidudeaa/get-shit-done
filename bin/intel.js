@@ -42,9 +42,12 @@ function loadRepoConfig(root) {
   const p = path.join(root, ".codebase-intel.json");
   const defaults = {
     globs: [
+      // JavaScript / TypeScript
       "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
       "lib/**/*.{ts,tsx,js,jsx,mjs,cjs}",
       "app/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+      // Python
+      "**/*.py",
     ],
     ignore: [
       "**/node_modules/**",
@@ -53,6 +56,12 @@ function loadRepoConfig(root) {
       "**/dist/**",
       "**/build/**",
       "**/.next/**",
+      // Python
+      "**/__pycache__/**",
+      "**/.venv/**",
+      "**/venv/**",
+      "**/.tox/**",
+      "**/site-packages/**",
     ],
     summaryEverySec: 5,
   };
@@ -147,9 +156,18 @@ function usage(exitCode = 1) {
     case "scan":
     case "rescan": {
       const pruneMissing = cmd === "rescan";
+      // Collect positional glob arguments (after cmd, before --flags)
+      const cliGlobs = [];
+      for (let i = 1; i < argv.length; i++) {
+        const a = argv[i];
+        if (a.startsWith("--")) break;
+        cliGlobs.push(a);
+      }
+
       for (const r of roots) {
         const cfg = loadRepoConfig(r);
-        await intel.scan(r, cfg.globs, { ignore: cfg.ignore, pruneMissing });
+        const globs = cliGlobs.length ? cliGlobs : cfg.globs;
+        await intel.scan(r, globs, { ignore: cfg.ignore, pruneMissing });
       }
       break;
     }
