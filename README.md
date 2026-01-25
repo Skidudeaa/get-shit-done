@@ -1,69 +1,92 @@
 # codebase-intel
 
-Automatic codebase intelligence for LLMs. Extracts import graphs, surfaces health metrics, and injects context at session start.
+**Health-aware codebase intelligence for LLMs.**
 
-**Languages:** JavaScript, TypeScript, Python
+`codebase-intel` continuously maps a repository's structure and injects a small,
+factual summary into Claude Code so the model starts every session oriented,
+not guessing.
 
-## Install
+It is designed to prevent the most common LLM failure mode:
+**hallucinating structure due to missing or stale context.**
+
+---
+
+## What it does
+
+- Indexes JavaScript, TypeScript, and Python codebases
+- Builds a dependency graph from real imports
+- Computes health metrics (resolution %, index age, unresolved patterns)
+- Identifies hotspots and likely entry points
+- Injects a concise summary into Claude Code:
+  - at session start
+  - live during the session when changes occur
+- Provides ranked search with structural context
+
+---
+
+## Why it exists
+
+LLMs are powerful but brittle when they lack orientation.
+Traditional tools (search, grep, embeddings) help *after* confusion starts.
+
+`codebase-intel` fixes the problem **before the first prompt** and keeps context fresh while you work.
+
+---
+
+## Installation (once per machine)
 
 ```bash
-cd /path/to/this/repo
-npm install && npm link
+cd /path/to/codebase-intel
+npm install
+npm link
 ```
 
-## Usage
+Verify:
 
 ```bash
-cd /path/to/your/project
-codebase-intel init      # creates .planning/intel/ and wires Claude hooks
-codebase-intel scan      # index files (or: scan "**/*.py" "**/*.ts")
-codebase-intel watch     # live updates (run in background)
+codebase-intel --help
 ```
 
-That's it. Claude Code now receives codebase intelligence at session start and on each prompt (when changed).
+---
+
+## Using it in a project
+
+```bash
+cd /path/to/project
+codebase-intel init
+codebase-intel scan
+codebase-intel watch --summary-every 5
+```
+
+That's it.
+
+Claude Code will now receive codebase intelligence automatically.
+
+---
 
 ## Commands
 
-| Command | What it does |
-|---------|--------------|
-| `init` | Create state dir, wire Claude hooks |
-| `scan` | Index files, build import graph |
-| `watch` | Watch for changes, update summary |
-| `health` | Show resolution %, index age, misses |
-| `summary` | Print current summary |
+| Command | Description |
+|---------|-------------|
+| `init` | Initialize repo state and wire Claude hooks |
+| `scan` | Full index / repair drift |
+| `watch` | Live updates (required for refresh) |
+| `health` | Show resolution %, index age |
+| `summary` | Print injected summary |
 | `retrieve <query>` | Ranked search with graph context |
 
-## How it works
+---
 
-1. **Scans** your codebase for imports/exports (AST for Python, regex for JS/TS)
-2. **Resolves** local imports to actual files
-3. **Generates** a summary with health metrics, hotspots, entry points
-4. **Injects** into Claude Code at session start
-5. **Refreshes** mid-session when files change (requires `watch` running)
+## Supported languages
 
-## Config (optional)
+- JavaScript
+- TypeScript
+- Python (AST-based parsing)
 
-Create `.codebase-intel.json` in your repo:
+---
 
-```json
-{
-  "globs": ["src/**/*.ts", "**/*.py"],
-  "ignore": ["**/node_modules/**", "**/dist/**"]
-}
-```
+## Status
 
-## State
+**v0.1.0** — Experimental but stable
 
-All state lives in `.planning/intel/`:
-- `graph.db` — SQLite import graph
-- `index.json` — file metadata
-- `summary.md` — injected into Claude
-
-Add `.planning/` to your `.gitignore`.
-
-## Troubleshooting
-
-```bash
-codebase-intel health    # check resolution %, index age
-codebase-intel summary   # see what Claude receives
-```
+Designed for real use across multiple repositories.
