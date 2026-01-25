@@ -163,7 +163,7 @@ Dense reference for the global-tool + per-repo-state model.
 ### Invariant
 - **Tooling** lives once (global install or linked repo).
 - **State** lives per repo under `.planning/intel/`.
-- **Claude hook** is generic (runs global CLI in repo CWD).
+- **Claude hooks**: SessionStart runs the global CLI; UserPromptSubmit uses a per-repo refresh helper.
 - **Watch/rescan** works per-repo or multi-repo.
 
 ---
@@ -199,6 +199,7 @@ Creates/ensures:
 .planning/intel/index.json
 .planning/intel/summary.md
 .claude/settings.json
+tools/codebase_intel/refresh.js
 ```
 
 `summary.md` is empty until you scan/rescan.
@@ -217,6 +218,7 @@ codebase-intel summary [--root <path>]
 codebase-intel health [--root <path>]
 codebase-intel query <imports|dependents|exports> --file <relPath> [--root <path>]
 codebase-intel hook sessionstart
+codebase-intel hook refresh
 codebase-intel inject
 codebase-intel retrieve <query>
 codebase-intel zoekt <index|serve|search>
@@ -227,6 +229,7 @@ Notes:
 - `update` is for a single file (used by watchers).
 - `watch` accepts multiple roots for a single daemon process.
 - `hook sessionstart` reads JSON on stdin (Claude Code SessionStart payload) and outputs the `<codebase-intelligence>` block.
+- `hook refresh` reads JSON on stdin (UserPromptSubmit payload) and outputs the same block only when the summary changes for that session.
 - `inject` is a manual wrapper that prints the same block without stdin filtering.
 - `retrieve` runs a ranked search (rg or zoekt) and returns a stable JSON schema.
 - `zoekt` manages the optional zoekt index/daemon and can run raw searches.
@@ -295,7 +298,7 @@ codebase-intel retrieve "useMemo" --backend zoekt --max-hits 60 --hits-per-file 
 
 ---
 
-## Claude Code SessionStart hook
+## Claude Code hooks (SessionStart + UserPromptSubmit)
 `codebase-intel init` ensures `.claude/settings.json` contains:
 
 ```json
@@ -308,6 +311,17 @@ codebase-intel retrieve "useMemo" --backend zoekt --max-hits 60 --hits-per-file 
           {
             "type": "command",
             "command": "codebase-intel hook sessionstart"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node tools/codebase_intel/refresh.js"
           }
         ]
       }
@@ -672,7 +686,9 @@ Use `/gsd:settings` to toggle these, or override per-invocation:
 | `parallelization.enabled` | `true` | Run independent plans simultaneously |
 | `planning.commit_docs` | `true` | Track `.planning/` in git |
 
-If Claude Code can’t find the global bin on PATH, replace the command with the absolute path to `codebase-intel`.
+Live refresh requires a running watcher (or periodic `rescan`) so `summary.md` changes mid-session.
+
+If Claude Code can’t find the global bin on PATH, replace the SessionStart command with the absolute path to `codebase-intel`.
 
 ---
 

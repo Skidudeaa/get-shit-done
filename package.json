@@ -7,10 +7,12 @@
   "bin": {
     "codebase-intel": "bin/intel.js"
   },
+  "scripts": {
+    "test": "bash scripts/test-refresh.sh"
+  },
   "dependencies": {
     "chokidar": "^3.6.0",
     "fast-glob": "^3.3.2",
     "sql.js": "^1.12.0"
   }
 }
-

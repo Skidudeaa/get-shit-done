@@ -12,10 +12,12 @@
   - `extractExportsFromFile(code, filePath)` - auto-detect language from path
   - `isSupported(ext)` - check if extension has an extractor
   - `listSupportedExtensions()` - list all registered extensions
+- UserPromptSubmit refresh helper (`tools/codebase_intel/refresh.js`) with per-session dedupe
 
 ### Changed
 - Refactored `lib/extractor.js` from monolithic JS/TS-only implementation to dispatcher pattern
 - Backward compatible: `extractImports(code, fileType)` and `extractExports(code, fileType)` unchanged
+- Refresh injection uses `<codebase-intelligence>` tag to match SessionStart
 
 ## [0.1.0] - 2026-01-23
 
