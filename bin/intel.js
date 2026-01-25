@@ -134,6 +134,35 @@ function usage(exitCode = 1) {
     process.exit(0);
   }
 
+  // ---- hook refresh (mid-session, on UserPromptSubmit) ----
+  if (cmd === "hook" && argv[1] === "refresh") {
+    const crypto = require("crypto");
+    const root = process.cwd();
+    const summaryPath = path.join(root, ".planning", "intel", "summary.md");
+    const cachePath = path.join(root, ".planning", "intel", ".last_injected_hash");
+
+    await readStdinJson(); // consume stdin
+
+    if (!fs.existsSync(summaryPath)) process.exit(0);
+
+    const summary = fs.readFileSync(summaryPath, "utf8").trim();
+    if (!summary) process.exit(0);
+
+    const h = crypto.createHash("sha256").update(summary).digest("hex");
+    const last = fs.existsSync(cachePath)
+      ? fs.readFileSync(cachePath, "utf8").trim()
+      : "";
+
+    // Only inject if changed since last injection
+    if (last === h) process.exit(0);
+
+    fs.writeFileSync(cachePath, h);
+    process.stdout.write(
+      `<codebase-intelligence-refresh>\n${summary}\n</codebase-intelligence-refresh>`
+    );
+    process.exit(0);
+  }
+
   if (cmd === "inject") {
     const root = process.cwd();
     await intel.init(root);
