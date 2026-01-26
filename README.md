@@ -2,34 +2,48 @@
 
 **Health-aware codebase intelligence for LLMs.**
 
-`codebase-intel` continuously maps a repository's structure and injects a small,
-factual summary into Claude Code so the model starts every session oriented,
-not guessing.
+`codebase-intel` is a lightweight, health-aware codebase intelligence service designed
+to keep LLM coding agents oriented, honest, and up-to-date while working in real
+repositories.
 
-It is designed to prevent the most common LLM failure mode:
-**hallucinating structure due to missing or stale context.**
+It continuously maps a repository's structure and injects a small, factual summary
+into Claude Code so the model starts every session oriented, not guessing. It is
+designed to prevent the most common LLM failure mode: **hallucinating structure due
+to missing or stale context.**
 
 ---
 
 ## What it does
 
-- Indexes JavaScript, TypeScript, and Python codebases
-- Builds a dependency graph from real imports
-- Computes health metrics (resolution %, index age, unresolved patterns)
-- Identifies hotspots and likely entry points
-- Injects a concise summary into Claude Code:
-  - at session start
-  - live during the session when changes occur
-- Provides ranked search with structural context
+- Indexes real structure in JavaScript, TypeScript, and Python by extracting
+  imports/exports (AST-based for Python) and building a dependency graph
+- Resolves local imports deterministically (relative paths, TS path aliases,
+  workspaces, Python relative/local modules) and records unresolved cases explicitly
+- Tracks health metrics—import resolution %, index age, and top misses—so the
+  system knows when its model of the repo is trustworthy and when it is not
+- Generates a bounded, factual summary (hotspots, entry points, recent changes,
+  health) stored on disk as the single source of truth
+- Injects that summary into Claude Code:
+  - once at SessionStart to establish orientation
+  - mid-session when the summary changes (deduped per session)
+- Provides structured retrieval via `retrieve`, combining search (rg or Zoekt)
+  with graph-aware reranking and limited neighbor expansion
 
 ---
 
 ## Why it exists
 
-LLMs are powerful but brittle when they lack orientation.
-Traditional tools (search, grep, embeddings) help *after* confusion starts.
+LLM coding failures are usually orientation failures: the model starts in the
+wrong files, misses blast radius, or hallucinates structure from incomplete
+context. Search alone helps after confusion begins and often amplifies noise.
 
-`codebase-intel` fixes the problem **before the first prompt** and keeps context fresh while you work.
+`codebase-intel` solves this by:
+- establishing an accurate mental map before the first prompt,
+- keeping that map fresh while the session is ongoing,
+- and making drift visible and actionable instead of silent.
+
+The result is not "smarter" models, but more reliable ones—agents that start in
+the right place, understand impact, and know when their understanding is degraded.
 
 ---
 
