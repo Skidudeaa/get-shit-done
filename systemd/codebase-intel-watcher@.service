@@ -1,10 +1,15 @@
 [Unit]
-Description=codebase-intel watcher (%i)
+Description=codebase-intel watcher for %I
+After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env codebase-intel watch --root %i
+WorkingDirectory=%I
+ExecStart=/usr/bin/env codebase-intel watch --summary-every 5
 Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target

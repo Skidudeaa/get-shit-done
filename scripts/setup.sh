@@ -4,11 +4,20 @@
 # Run this in any project directory to enable codebase intelligence.
 #
 # Usage:
-#   curl -sSL <url>/setup.sh | bash
-#   # or
-#   ./setup.sh
+#   ./setup.sh           # Setup only
+#   ./setup.sh --watch   # Setup + enable systemd watcher service
 #
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENABLE_WATCH=false
+
+# Parse flags
+for arg in "$@"; do
+  case $arg in
+    --watch) ENABLE_WATCH=true ;;
+  esac
+done
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -75,16 +84,31 @@ else
   info "Created .gitignore with .planning/"
 fi
 
+# Optionally enable systemd watcher service
+if [ "$ENABLE_WATCH" = true ]; then
+  echo ""
+  echo "Enabling systemd watcher service..."
+  "$SCRIPT_DIR/watcher-service.sh" enable "$(pwd)"
+fi
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Setup complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Next steps:"
-echo "  1. Start the watcher (keeps intelligence fresh):"
-echo "     codebase-intel watch --summary-every 5"
-echo ""
-echo "  2. Or run it in the background:"
-echo "     nohup codebase-intel watch --summary-every 5 > /dev/null 2>&1 &"
+
+if [ "$ENABLE_WATCH" = true ]; then
+  echo "Watcher service is running. Manage with:"
+  echo "  $SCRIPT_DIR/watcher-service.sh status"
+  echo "  $SCRIPT_DIR/watcher-service.sh logs"
+  echo "  $SCRIPT_DIR/watcher-service.sh disable"
+else
+  echo "Next steps (optional):"
+  echo "  Enable persistent watcher service:"
+  echo "    $SCRIPT_DIR/watcher-service.sh enable"
+  echo ""
+  echo "  Or run manually:"
+  echo "    codebase-intel watch --summary-every 5"
+fi
 echo ""
 echo "Claude Code will now receive codebase intelligence automatically."
