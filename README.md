@@ -89,12 +89,33 @@ Claude Code will now receive codebase intelligence automatically.
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize repo state and wire Claude hooks |
-| `scan` | Full index / repair drift |
-| `watch` | Live updates (required for refresh) |
-| `health` | Show resolution %, index age (JSON) |
-| `doctor` | Diagnose setup, health, and hints |
+| `scan [--force]` | Full index (skips unchanged files unless forced) |
+| `rescan [--force]` | Scan + prune deleted files |
+| `watch` | Live updates with dashboard |
+| `health [--pretty]` | Show resolution %, index age |
+| `doctor` | Visual diagnostic dashboard with trends |
 | `summary` | Print injected summary |
-| `retrieve <query>` | Ranked search with graph context |
+| `retrieve <query> [--pretty]` | Ranked search with graph context |
+
+---
+
+## Visual Features
+
+The CLI includes rich terminal visualizations:
+
+```
+## Health
+  resolution        ████████████░░░░░░░░ 62%  23/37
+
+  Trends            (10 snapshots)
+  resolution        ▁▃▄▃▅▇▆█▇▅  55% → 62%  +7%
+  files             ▁▂▃▄▅▅▆▇▇█  18 → 25  +7
+```
+
+- **Progress bars** during scan/rescan
+- **Sparklines** for health trends over time
+- **Live dashboard** during watch mode
+- **Relevance bars** in search results (`retrieve --pretty`)
 
 ---
 

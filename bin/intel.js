@@ -99,8 +99,8 @@ async function readStdinJson() {
 function usage(exitCode = 1) {
   console.log(`Usage:
   codebase-intel init [--root <path> | --roots <a,b> | --roots-file <file>]
-  codebase-intel scan [--root/--roots/--roots-file]
-  codebase-intel rescan [--root/--roots/--roots-file]
+  codebase-intel scan [--root/--roots/--roots-file] [--force]
+  codebase-intel rescan [--root/--roots/--roots-file] [--force]
   codebase-intel update --file <relPath> [--root <path>]
   codebase-intel watch [--root/--roots/--roots-file] [--summary-every <sec>] [--no-dashboard]
   codebase-intel summary [--root <path>]
@@ -210,6 +210,7 @@ function usage(exitCode = 1) {
     case "scan":
     case "rescan": {
       const pruneMissing = cmd === "rescan";
+      const forceReindex = hasFlag(process.argv, "--force");
       const viz = require("../lib/terminal-viz");
       const isTTY = process.stdout.isTTY;
       
@@ -227,11 +228,22 @@ function usage(exitCode = 1) {
         
         // Progress callback for visual feedback
         let lastRender = 0;
-        const onProgress = ({ phase, total, processed, file }) => {
+        let skippedCount = 0;
+        let indexedCount = 0;
+        const onProgress = ({ phase, total, processed, file, skipped }) => {
+          // Track skipped vs indexed
+          if (phase === "indexing") {
+            if (skipped) skippedCount++;
+            else indexedCount++;
+          }
+          
           if (!isTTY) {
             // Non-TTY: just print dots or simple status
             if (phase === "start") process.stdout.write(`Scanning ${r}...`);
-            else if (phase === "done") process.stdout.write(` done (${total} files)\n`);
+            else if (phase === "done") {
+              const skipNote = skippedCount > 0 ? `, ${skippedCount} unchanged` : "";
+              process.stdout.write(` done (${indexedCount} indexed${skipNote})\n`);
+            }
             return;
           }
           
@@ -252,19 +264,21 @@ function usage(exitCode = 1) {
           }
           
           if (phase === "start") {
-            process.stdout.write(`\n${viz.c(`Scanning ${r}`, viz.colors.bold)}\n`);
+            process.stdout.write(`\n${viz.c(`Scanning ${r}`, viz.colors.bold)}${forceReindex ? viz.c(" (forced)", viz.colors.yellow) : ""}\n`);
           } else if (phase === "indexing") {
-            const status = `  ${progressBar} ${processed}/${total}  ${viz.dim(displayFile)}`;
+            const skipIndicator = skipped ? viz.dim(" [skip]") : "";
+            const status = `  ${progressBar} ${processed}/${total}  ${viz.dim(displayFile)}${skipIndicator}`;
             process.stdout.write(`\r\x1b[K${status}`);
           } else if (phase === "flushing") {
             process.stdout.write(`\r\x1b[K  ${progressBar} ${processed}/${total}  ${viz.dim("writing index...")}`);
           } else if (phase === "done") {
             const finalBar = viz.bar(100, barWidth, { showPercent: false, thresholds: { warn: 0, danger: 0 } });
-            process.stdout.write(`\r\x1b[K  ${finalBar} ${viz.c(`${total} files indexed`, viz.colors.green)}\n\n`);
+            const skipNote = skippedCount > 0 ? viz.dim(` (${skippedCount} unchanged)`) : "";
+            process.stdout.write(`\r\x1b[K  ${finalBar} ${viz.c(`${indexedCount} files indexed`, viz.colors.green)}${skipNote}\n\n`);
           }
         };
         
-        await intel.scan(r, globs, { ignore: cfg.ignore, pruneMissing, onProgress });
+        await intel.scan(r, globs, { ignore: cfg.ignore, pruneMissing, onProgress, force: forceReindex });
       }
       break;
     }

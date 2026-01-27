@@ -40,3 +40,9 @@
 - [x] Multi-root support
 - [x] Claude Code hook integration
 - [x] systemd service templates
+- [x] Terminal visualizations - bars, sparklines, colors (2026-01-26)
+- [x] Scan progress bar
+- [x] Live watch dashboard
+- [x] Historical health sparklines
+- [x] Mtime-based cache skipping for fast rescans
+- [x] Python extractor (AST-based)

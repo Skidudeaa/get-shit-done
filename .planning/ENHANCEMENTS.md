@@ -682,7 +682,7 @@ Or keep direct node but consolidate `refresh.js` logic into main lib.
 - [ ] Fix silent exception swallowing (#1)
 - [ ] Fix Python double-parsing (#3)
 - [ ] Fix config drift - Python globs (#4)
-- [ ] Add mtime-based cache skipping (#5)
+- [x] Add mtime-based cache skipping (#5) ✓ DONE
 - [ ] Extract `isEntryPoint()` to utils (#8)
 - [ ] Extract `which()` to utils (#9)
 - [ ] Add `--version` command (#20)
@@ -696,7 +696,7 @@ Or keep direct node but consolidate `refresh.js` logic into main lib.
 - [ ] Create generic scheduler factory (#12)
 - [ ] Add pnpm workspace support (#13)
 - [ ] Add `--verbose`/`--quiet` flags (#21)
-- [ ] Add scan progress indication (#22)
+- [x] Add scan progress indication (#22) ✓ DONE
 
 ### Larger Projects (4+ hours)
 - [ ] Implement Python batch worker (#2)

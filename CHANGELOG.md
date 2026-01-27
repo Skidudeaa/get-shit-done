@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- **Terminal visualizations** (`lib/terminal-viz.js`)
+  - Progress bars, sparklines, status icons, colored output
+  - Zero dependencies - uses ANSI escape codes directly
+- **Scan progress bar** - animated progress during `scan`/`rescan`
+- **`--force` flag** for scan/rescan - bypass mtime cache, reindex all files
+- **`--pretty` flag** for `health` and `retrieve` - visual output mode
+- **Live watch dashboard** - real-time stats, activity sparkline, resolution bar
+  - `--no-dashboard` flag for headless operation
+- **Historical health tracking** (`lib/history.js`)
+  - Records snapshots on each summary write
+  - `doctor` shows resolution/files trends as sparklines
+- **Mtime-based cache skipping** - skip unchanged files during scan (5-10x faster rescans)
+
+### Changed
+- `doctor` command now shows visual bars, colored status icons, trend sparklines
+- Scan output shows indexed vs unchanged file counts
+
+---
+
 - Pluggable extractor architecture for multi-language support
   - `lib/extractors/` directory with language-specific modules
   - `lib/extractors/index.js` registry for extension-to-extractor mapping
