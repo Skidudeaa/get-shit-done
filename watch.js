@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 
 const intel = require("./lib/intel");
+const viz = require("./lib/terminal-viz");
 
 function debounce(fn, ms) {
   let t = null;
@@ -12,8 +13,105 @@ function debounce(fn, ms) {
   };
 }
 
-async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = null }) {
+/**
+ * Live dashboard state for a single root
+ */
+function createDashboardState(root) {
+  return {
+    root,
+    startTime: Date.now(),
+    totalUpdates: 0,
+    lastUpdateTime: null,
+    lastUpdateFile: null,
+    recentUpdates: [],       // timestamps of recent updates (for sparkline)
+    errors: 0,
+    resolutionPct: null,
+    indexedFiles: null,
+  };
+}
+
+/**
+ * Render the live dashboard (overwrites previous output)
+ */
+function renderDashboard(states, isTTY) {
+  if (!isTTY) return; // Skip rendering in non-TTY mode
+  
+  const lines = [];
+  const now = Date.now();
+  
+  lines.push("");
+  lines.push(viz.c("━".repeat(60), viz.colors.dim));
+  lines.push(viz.c(" codebase-intel watcher", viz.colors.bold, viz.colors.cyan));
+  lines.push(viz.c("━".repeat(60), viz.colors.dim));
+  
+  for (const st of states) {
+    const uptime = Math.floor((now - st.startTime) / 1000);
+    const uptimeStr = uptime < 60 ? `${uptime}s` : `${Math.floor(uptime / 60)}m ${uptime % 60}s`;
+    
+    // Activity sparkline (last 20 time buckets, 3s each)
+    const buckets = new Array(20).fill(0);
+    const bucketMs = 3000;
+    for (const ts of st.recentUpdates) {
+      const age = now - ts;
+      const bucketIdx = Math.floor(age / bucketMs);
+      if (bucketIdx >= 0 && bucketIdx < buckets.length) {
+        buckets[buckets.length - 1 - bucketIdx] += 1;
+      }
+    }
+    const activitySparkline = viz.sparkline(buckets);
+    
+    // Last update age
+    let lastUpdateStr = viz.dim("none");
+    if (st.lastUpdateTime) {
+      const ageSec = Math.floor((now - st.lastUpdateTime) / 1000);
+      lastUpdateStr = viz.ageStatus(ageSec, { warn: 60, danger: 300 });
+    }
+    
+    // Resolution bar
+    let resBar = viz.dim("--");
+    if (st.resolutionPct != null) {
+      resBar = viz.bar(st.resolutionPct, 12, { showPercent: true });
+    }
+    
+    // Truncate root path
+    const maxRootLen = 40;
+    let displayRoot = st.root;
+    if (displayRoot.length > maxRootLen) {
+      displayRoot = "..." + displayRoot.slice(-maxRootLen + 3);
+    }
+    
+    lines.push("");
+    lines.push(`  ${viz.c(displayRoot, viz.colors.bold)}`);
+    lines.push(`  ${viz.dim("Uptime:")} ${uptimeStr}  ${viz.dim("Updates:")} ${st.totalUpdates}  ${viz.dim("Errors:")} ${st.errors > 0 ? viz.c(String(st.errors), viz.colors.red) : viz.c("0", viz.colors.green)}`);
+    lines.push(`  ${viz.dim("Resolution:")} ${resBar}  ${viz.dim("Files:")} ${st.indexedFiles ?? "?"}`);
+    lines.push(`  ${viz.dim("Activity:")} ${activitySparkline}  ${viz.dim("Last:")} ${lastUpdateStr}`);
+    
+    if (st.lastUpdateFile) {
+      let displayFile = st.lastUpdateFile;
+      if (displayFile.length > 45) {
+        displayFile = "..." + displayFile.slice(-42);
+      }
+      lines.push(`  ${viz.dim("File:")} ${displayFile}`);
+    }
+  }
+  
+  lines.push("");
+  lines.push(viz.c("━".repeat(60), viz.colors.dim));
+  lines.push(viz.dim("  Press Ctrl+C to stop"));
+  lines.push("");
+  
+  // Move cursor up and clear, then render
+  const output = lines.join("\n");
+  const lineCount = lines.length;
+  
+  // Clear previous output and render new
+  process.stderr.write(`\x1b[${lineCount}A\x1b[J${output}`);
+}
+
+async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = null, dashboard = true }) {
   const watchers = [];
+  const isTTY = process.stderr.isTTY && dashboard;
+  const dashboardStates = [];
 
   for (const root of roots) {
     const cfg = loadRepoConfig(root);
@@ -25,6 +123,17 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
     );
 
     await intel.init(root);
+    
+    // Initialize dashboard state
+    const dashState = createDashboardState(root);
+    dashboardStates.push(dashState);
+    
+    // Get initial health
+    try {
+      const h = await intel.health(root);
+      dashState.resolutionPct = h.resolutionPct ?? h.metrics?.resolutionPct ?? null;
+      dashState.indexedFiles = h.index?.files ?? h.metrics?.indexedFiles ?? null;
+    } catch {}
 
     const pending = new Set();
     const flush = debounce(async () => {
@@ -35,10 +144,32 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
       for (const rel of files) {
         try {
           await intel.updateFile(root, rel, { summaryThrottleMs: throttleMs });
+          
+          // Update dashboard state
+          dashState.totalUpdates += 1;
+          dashState.lastUpdateTime = Date.now();
+          dashState.lastUpdateFile = rel;
+          dashState.recentUpdates.push(Date.now());
+          
+          // Keep only last 60 seconds of updates
+          const cutoff = Date.now() - 60000;
+          dashState.recentUpdates = dashState.recentUpdates.filter(t => t > cutoff);
+          
         } catch (e) {
-          process.stderr.write(`[intel] ${root}: update failed ${rel}: ${e.message}\n`);
+          dashState.errors += 1;
+          if (!isTTY) {
+            process.stderr.write(`[intel] ${root}: update failed ${rel}: ${e.message}\n`);
+          }
         }
       }
+      
+      // Refresh health metrics periodically
+      try {
+        const h = await intel.health(root);
+        dashState.resolutionPct = h.resolutionPct ?? h.metrics?.resolutionPct ?? null;
+        dashState.indexedFiles = h.index?.files ?? h.metrics?.indexedFiles ?? null;
+      } catch {}
+      
     }, 250);
 
     const w = chokidar.watch(globs, {
@@ -58,18 +189,50 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
       .on("change", onChange)
       .on("unlink", (rel) => {
         // deletion drift is handled by nightly rescan; keep unlink cheap
-        process.stderr.write(`[intel] ${root}: unlink ignored ${rel}\n`);
+        if (!isTTY) {
+          process.stderr.write(`[intel] ${root}: unlink ignored ${rel}\n`);
+        }
       })
-      .on("error", (err) => process.stderr.write(`[intel] ${root}: watcher error: ${err}\n`))
-      .on("ready", () =>
-        process.stderr.write(`[intel] watching ${root} (${globs.join(", ")})\n`)
-      );
+      .on("error", (err) => {
+        dashState.errors += 1;
+        if (!isTTY) {
+          process.stderr.write(`[intel] ${root}: watcher error: ${err}\n`);
+        }
+      })
+      .on("ready", () => {
+        if (!isTTY) {
+          process.stderr.write(`[intel] watching ${root} (${globs.join(", ")})\n`);
+        }
+      });
 
     watchers.push(w);
   }
 
+  // Start dashboard refresh loop
+  let dashboardInterval = null;
+  if (isTTY) {
+    // Print initial blank lines to make room for dashboard
+    const initialLines = 12 + dashboardStates.length * 6;
+    process.stderr.write("\n".repeat(initialLines));
+    
+    dashboardInterval = setInterval(() => {
+      renderDashboard(dashboardStates, isTTY);
+    }, 1000);
+    dashboardInterval.unref();
+    
+    // Initial render
+    renderDashboard(dashboardStates, isTTY);
+  }
+
   const shutdown = async (sig) => {
-    process.stderr.write(`[intel] shutting down (${sig})\n`);
+    if (dashboardInterval) clearInterval(dashboardInterval);
+    
+    if (isTTY) {
+      process.stderr.write(`\n${viz.status("info", `Shutting down (${sig})...`)}\n`);
+    } else {
+      process.stderr.write(`[intel] shutting down (${sig})\n`);
+    }
+    
     for (const w of watchers) {
       try {
         await w.close();

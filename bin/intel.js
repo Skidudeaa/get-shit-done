@@ -102,7 +102,7 @@ function usage(exitCode = 1) {
   codebase-intel scan [--root/--roots/--roots-file]
   codebase-intel rescan [--root/--roots/--roots-file]
   codebase-intel update --file <relPath> [--root <path>]
-  codebase-intel watch [--root/--roots/--roots-file] [--summary-every <sec>]
+  codebase-intel watch [--root/--roots/--roots-file] [--summary-every <sec>] [--no-dashboard]
   codebase-intel summary [--root <path>]
   codebase-intel health [--root <path>] [--pretty]
   codebase-intel doctor [--root <path>]
@@ -284,11 +284,14 @@ function usage(exitCode = 1) {
         console.error("Invalid --summary-every value");
         process.exit(1);
       }
+      
+      const noDashboard = hasFlag(process.argv, "--no-dashboard");
 
       const { watchRoots } = require("../watch");
       await watchRoots(roots, {
         loadRepoConfig,
         summaryEverySecOverride: sec,
+        dashboard: !noDashboard,
       });
       break;
     }
