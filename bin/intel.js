@@ -402,6 +402,43 @@ function usage(exitCode = 1) {
       const ageNote = ageSec > 300 ? viz.status("warn", "stale (watcher not running?)") : "";
       lines.push(`  ${viz.c("index age".padEnd(18), viz.colors.dim)}${ageDisplay}  ${ageNote}`);
 
+      // Historical trends
+      const history = require("../lib/history");
+      const histSummary = history.getHistorySummary(rootAbs, 20);
+      if (histSummary.snapshotCount > 1) {
+        lines.push("");
+        lines.push(`  ${viz.c("Trends".padEnd(18), viz.colors.dim)}(${histSummary.snapshotCount} snapshots)`);
+        
+        // Resolution trend sparkline
+        if (histSummary.resolutionTrend.length > 1) {
+          const resTrend = histSummary.resolutionTrend;
+          const first = resTrend[0];
+          const last = resTrend[resTrend.length - 1];
+          const delta = last - first;
+          const deltaStr = delta >= 0 ? viz.c(`+${delta}%`, viz.colors.green) : viz.c(`${delta}%`, viz.colors.red);
+          const spark = viz.sparkline(resTrend);
+          lines.push(`  ${viz.c("resolution".padEnd(18), viz.colors.dim)}${spark}  ${first}% → ${last}%  ${deltaStr}`);
+        }
+        
+        // Files trend sparkline
+        if (histSummary.filesTrend.length > 1) {
+          const filesTrend = histSummary.filesTrend;
+          const first = filesTrend[0];
+          const last = filesTrend[filesTrend.length - 1];
+          const delta = last - first;
+          const deltaStr = delta >= 0 ? viz.c(`+${delta}`, viz.colors.cyan) : viz.c(`${delta}`, viz.colors.yellow);
+          const spark = viz.sparkline(filesTrend);
+          lines.push(`  ${viz.c("files".padEnd(18), viz.colors.dim)}${spark}  ${first} → ${last}  ${deltaStr}`);
+        }
+        
+        // Time range
+        if (histSummary.firstTs && histSummary.lastTs) {
+          const rangeMs = histSummary.lastTs - histSummary.firstTs;
+          const rangeHours = (rangeMs / 3600000).toFixed(1);
+          lines.push(`  ${viz.c("period".padEnd(18), viz.colors.dim)}${rangeHours}h of history`);
+        }
+      }
+
       // Top misses
       const misses = h.metrics?.topMisses ?? h.topMisses ?? [];
       if (misses.length > 0) {
