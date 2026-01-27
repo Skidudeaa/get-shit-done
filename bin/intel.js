@@ -104,7 +104,7 @@ function usage(exitCode = 1) {
   codebase-intel update --file <relPath> [--root <path>]
   codebase-intel watch [--root/--roots/--roots-file] [--summary-every <sec>]
   codebase-intel summary [--root <path>]
-  codebase-intel health [--root <path>]
+  codebase-intel health [--root <path>] [--pretty]
   codebase-intel doctor [--root <path>]
   codebase-intel query <imports|dependents|exports> --file <relPath> [--root <path>]
   codebase-intel hook sessionstart
@@ -210,6 +210,9 @@ function usage(exitCode = 1) {
     case "scan":
     case "rescan": {
       const pruneMissing = cmd === "rescan";
+      const viz = require("../lib/terminal-viz");
+      const isTTY = process.stdout.isTTY;
+      
       // Collect positional glob arguments (after cmd, before --flags)
       const cliGlobs = [];
       for (let i = 1; i < argv.length; i++) {
@@ -221,7 +224,47 @@ function usage(exitCode = 1) {
       for (const r of roots) {
         const cfg = loadRepoConfig(r);
         const globs = cliGlobs.length ? cliGlobs : cfg.globs;
-        await intel.scan(r, globs, { ignore: cfg.ignore, pruneMissing });
+        
+        // Progress callback for visual feedback
+        let lastRender = 0;
+        const onProgress = ({ phase, total, processed, file }) => {
+          if (!isTTY) {
+            // Non-TTY: just print dots or simple status
+            if (phase === "start") process.stdout.write(`Scanning ${r}...`);
+            else if (phase === "done") process.stdout.write(` done (${total} files)\n`);
+            return;
+          }
+          
+          const now = Date.now();
+          // Throttle renders to ~60fps max
+          if (phase === "indexing" && now - lastRender < 16) return;
+          lastRender = now;
+          
+          const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+          const barWidth = 30;
+          const progressBar = viz.bar(pct, barWidth, { showPercent: false, thresholds: { warn: 0, danger: 0 } });
+          
+          // Truncate filename to fit
+          const maxFileLen = 40;
+          let displayFile = file || "";
+          if (displayFile.length > maxFileLen) {
+            displayFile = "..." + displayFile.slice(-maxFileLen + 3);
+          }
+          
+          if (phase === "start") {
+            process.stdout.write(`\n${viz.c(`Scanning ${r}`, viz.colors.bold)}\n`);
+          } else if (phase === "indexing") {
+            const status = `  ${progressBar} ${processed}/${total}  ${viz.dim(displayFile)}`;
+            process.stdout.write(`\r\x1b[K${status}`);
+          } else if (phase === "flushing") {
+            process.stdout.write(`\r\x1b[K  ${progressBar} ${processed}/${total}  ${viz.dim("writing index...")}`);
+          } else if (phase === "done") {
+            const finalBar = viz.bar(100, barWidth, { showPercent: false, thresholds: { warn: 0, danger: 0 } });
+            process.stdout.write(`\r\x1b[K  ${finalBar} ${viz.c(`${total} files indexed`, viz.colors.green)}\n\n`);
+          }
+        };
+        
+        await intel.scan(r, globs, { ignore: cfg.ignore, pruneMissing, onProgress });
       }
       break;
     }
@@ -260,7 +303,53 @@ function usage(exitCode = 1) {
     case "health": {
       const r = roots[0];
       const h = await intel.health(r);
-      process.stdout.write(JSON.stringify(h, null, 2) + "\n");
+      
+      // --pretty flag for visual output
+      if (hasFlag(process.argv, "--pretty")) {
+        const viz = require("../lib/terminal-viz");
+        const lines = [];
+        
+        lines.push(viz.c("# Health Report", viz.colors.bold, viz.colors.cyan));
+        lines.push("");
+        
+        // Resolution bar
+        const pct = h.resolutionPct ?? 0;
+        const resolved = h.localResolved ?? 0;
+        const total = h.localTotal ?? 0;
+        lines.push(`  ${viz.c("Resolution".padEnd(14), viz.colors.dim)}${viz.bar(pct, 25)} ${resolved}/${total}`);
+        
+        // Index stats
+        const indexed = h.metrics?.indexedFiles ?? h.index?.files ?? h.indexedFiles ?? 0;
+        lines.push(`  ${viz.c("Indexed".padEnd(14), viz.colors.dim)}${indexed} files`);
+        const ageSec = h.metrics?.indexAgeSec ?? h.indexAgeSec ?? null;
+        lines.push(`  ${viz.c("Index Age".padEnd(14), viz.colors.dim)}${viz.ageStatus(ageSec)}`);
+        
+        // Type distribution (if available)
+        const typeCounts = h.metrics?.typeCounts ?? h.typeCounts ?? [];
+        if (typeCounts.length > 0) {
+          lines.push("");
+          lines.push(viz.c("  File Types", viz.colors.dim));
+          const maxTypeCount = Math.max(...typeCounts.map(x => x.c));
+          for (const { t, c: count } of typeCounts.slice(0, 5)) {
+            const pctOfMax = (count / maxTypeCount) * 100;
+            lines.push(`    ${t.padEnd(12)} ${viz.bar(pctOfMax, 12, { showPercent: false, thresholds: { warn: 0, danger: 0 } })} ${count}`);
+          }
+        }
+        
+        // Top misses
+        if (h.topMisses && h.topMisses.length > 0) {
+          lines.push("");
+          lines.push(viz.c("  Unresolved Imports", viz.colors.dim));
+          for (const [spec, count] of h.topMisses.slice(0, 5)) {
+            lines.push(`    ${viz.c(String(count).padStart(3), viz.colors.yellow)} ${spec}`);
+          }
+        }
+        
+        lines.push("");
+        process.stdout.write(lines.join("\n") + "\n");
+      } else {
+        process.stdout.write(JSON.stringify(h, null, 2) + "\n");
+      }
       break;
     }
 
@@ -269,79 +358,84 @@ function usage(exitCode = 1) {
       const rootAbs = path.resolve(r);
       const h = await intel.health(r);
       const cfg = loadRepoConfig(r);
+      const viz = require("../lib/terminal-viz");
 
       const lines = [];
-      lines.push("# codebase-intel doctor");
+      lines.push(viz.c("# codebase-intel doctor", viz.colors.bold, viz.colors.cyan));
       lines.push("");
 
       // State files
-      lines.push("## State");
+      lines.push(viz.header("State"));
       const stateDir = path.join(rootAbs, ".planning", "intel");
       const graphDb = path.join(stateDir, "graph.db");
       const indexJson = path.join(stateDir, "index.json");
       const summaryMd = path.join(stateDir, "summary.md");
       const claudeSettings = path.join(rootAbs, ".claude", "settings.json");
 
-      lines.push(`  state dir:       ${fs.existsSync(stateDir) ? "✓" : "✗"} ${stateDir}`);
-      lines.push(`  graph.db:        ${fs.existsSync(graphDb) ? "✓" : "✗"}`);
-      lines.push(`  index.json:      ${fs.existsSync(indexJson) ? "✓" : "✗"}`);
-      lines.push(`  summary.md:      ${fs.existsSync(summaryMd) ? "✓" : "✗"}`);
-      lines.push(`  claude settings: ${fs.existsSync(claudeSettings) ? "✓" : "✗"}`);
-      lines.push("");
+      lines.push(viz.metric("state dir", fs.existsSync(stateDir) ? viz.status("ok", stateDir) : viz.status("error", stateDir)));
+      lines.push(viz.metric("graph.db", fs.existsSync(graphDb) ? viz.status("ok", "exists") : viz.status("error", "missing")));
+      lines.push(viz.metric("index.json", fs.existsSync(indexJson) ? viz.status("ok", "exists") : viz.status("error", "missing")));
+      lines.push(viz.metric("summary.md", fs.existsSync(summaryMd) ? viz.status("ok", "exists") : viz.status("error", "missing")));
+      lines.push(viz.metric("claude settings", fs.existsSync(claudeSettings) ? viz.status("ok", "exists") : viz.status("warn", "missing")));
 
       // Health metrics
-      lines.push("## Health");
+      lines.push(viz.header("Health"));
       const pct = h.metrics?.resolutionPct ?? h.resolutionPct ?? 0;
       const resolved = h.metrics?.localResolved ?? h.localResolved ?? 0;
       const total = h.metrics?.localTotal ?? h.localTotal ?? 0;
       const ageSec = h.metrics?.indexAgeSec ?? h.indexAgeSec ?? 0;
       const indexed = h.metrics?.indexedFiles ?? h.index?.files ?? 0;
 
-      let healthStatus = "✓ healthy";
-      if (pct < 90) healthStatus = "✗ degraded (graph boosts gated)";
-      else if (pct < 95) healthStatus = "⚠ watch it";
+      // Resolution with bar chart
+      let resStatus = viz.status("ok", "healthy");
+      if (pct < 90) resStatus = viz.status("error", "degraded (graph boosts gated)");
+      else if (pct < 95) resStatus = viz.status("warn", "watch it");
 
-      lines.push(`  resolution:      ${pct}% (${resolved}/${total}) ${healthStatus}`);
-      lines.push(`  indexed files:   ${indexed}`);
-      lines.push(`  index age:       ${ageSec}s ${ageSec > 300 ? "⚠ stale (watcher not running?)" : ""}`);
-      lines.push("");
+      lines.push(`  ${viz.c("resolution".padEnd(18), viz.colors.dim)}${viz.bar(pct, 20)}  ${resolved}/${total}  ${resStatus}`);
+      lines.push(viz.metric("indexed files", indexed));
+      
+      // Index age with color
+      const ageDisplay = viz.ageStatus(ageSec, { warn: 300, danger: 3600 });
+      const ageNote = ageSec > 300 ? viz.status("warn", "stale (watcher not running?)") : "";
+      lines.push(`  ${viz.c("index age".padEnd(18), viz.colors.dim)}${ageDisplay}  ${ageNote}`);
 
       // Top misses
       const misses = h.metrics?.topMisses ?? h.topMisses ?? [];
       if (misses.length > 0) {
-        lines.push("## Top unresolved imports");
+        lines.push(viz.header("Top Unresolved Imports"));
+        const maxCount = Math.max(...misses.slice(0, 5).map(m => m[1]));
         for (const [spec, count] of misses.slice(0, 5)) {
-          lines.push(`  ${spec} (${count})`);
+          const miniBar = viz.bar((count / maxCount) * 100, 10, { showPercent: false, thresholds: { warn: 999, danger: 999 } });
+          lines.push(`  ${viz.c(String(count).padStart(3), viz.colors.yellow)} ${miniBar} ${spec}`);
         }
-        lines.push("");
       }
 
       // Config
-      lines.push("## Config");
-      lines.push(`  globs: ${JSON.stringify(cfg.globs)}`);
-      lines.push(`  ignore: ${JSON.stringify(cfg.ignore.slice(0, 3))}${cfg.ignore.length > 3 ? "..." : ""}`);
-      lines.push("");
+      lines.push(viz.header("Config"));
+      lines.push(viz.metric("globs", viz.dim(JSON.stringify(cfg.globs.slice(0, 2)) + (cfg.globs.length > 2 ? "..." : ""))));
+      lines.push(viz.metric("ignore", viz.dim(`${cfg.ignore.length} patterns`)));
 
       // Search backends
-      lines.push("## Search backends");
-      lines.push(`  rg:    ${require("child_process").spawnSync("which", ["rg"]).status === 0 ? "✓" : "✗"}`);
+      lines.push(viz.header("Search Backends"));
+      const rgInstalled = require("child_process").spawnSync("which", ["rg"]).status === 0;
       const zoektInstalled = require("child_process").spawnSync("which", ["zoekt-webserver"]).status === 0;
-      lines.push(`  zoekt: ${zoektInstalled ? "✓" : "✗ (optional)"}`);
-      lines.push("");
+      lines.push(viz.metric("ripgrep (rg)", rgInstalled ? viz.status("ok", "installed") : viz.status("error", "missing")));
+      lines.push(viz.metric("zoekt", zoektInstalled ? viz.status("ok", "installed") : viz.status("info", "not installed (optional)")));
 
       // Hints
-      lines.push("## Hints");
+      lines.push(viz.header("Hints"));
       if (!fs.existsSync(stateDir)) {
-        lines.push("  → Run: codebase-intel init");
+        lines.push(`  ${viz.status("info", "Run: codebase-intel init")}`);
       } else if (indexed === 0) {
-        lines.push("  → Run: codebase-intel scan");
+        lines.push(`  ${viz.status("info", "Run: codebase-intel scan")}`);
       } else if (ageSec > 300) {
-        lines.push("  → Start watcher: codebase-intel watch --summary-every 5");
+        lines.push(`  ${viz.status("warn", "Start watcher: codebase-intel watch --summary-every 5")}`);
       } else if (pct < 90) {
-        lines.push("  → Check resolver / adjust globs in .codebase-intel.json");
+        lines.push(`  ${viz.status("warn", "Check resolver / adjust globs in .codebase-intel.json")}`);
       } else {
-        lines.push("  ✓ System looks healthy");
+        lines.push(`  ${viz.status("ok", "System looks healthy")}`);
       }
+      lines.push("");
 
       process.stdout.write(lines.join("\n") + "\n");
       break;
@@ -370,7 +464,7 @@ function usage(exitCode = 1) {
 
     case "retrieve": {
       const r = roots[0];
-      const boolFlags = new Set(["--explain-hits", "--zoekt-build"]);
+      const boolFlags = new Set(["--explain-hits", "--zoekt-build", "--pretty"]);
       const parts = [];
       for (let i = 1; i < argv.length; i += 1) {
         const a = argv[i];
@@ -384,7 +478,7 @@ function usage(exitCode = 1) {
       const q = parts.join(" ").trim();
       if (!q) {
         console.error(
-          "Usage: codebase-intel retrieve <query> [--backend auto|zoekt|rg] [--context N] [--max-hits N] [--max-files N] [--expand imports,dependents] [--max-related N] [--hits-per-file N] [--explain-hits] [--rerank-min-resolution N] [--zoekt-build] [--zoekt-port N]"
+          "Usage: codebase-intel retrieve <query> [--backend auto|zoekt|rg] [--context N] [--max-hits N] [--max-files N] [--expand imports,dependents] [--max-related N] [--hits-per-file N] [--explain-hits] [--rerank-min-resolution N] [--zoekt-build] [--zoekt-port N] [--pretty]"
         );
         process.exit(1);
       }
@@ -398,6 +492,7 @@ function usage(exitCode = 1) {
       const rerankMinResolution = parseInt(flag(process.argv, "--rerank-min-resolution") || "", 10);
       const expandRaw = flag(process.argv, "--expand");
       const zoektPort = parseInt(flag(process.argv, "--zoekt-port") || "", 10);
+      const prettyOutput = hasFlag(process.argv, "--pretty");
 
       const out = await retrieve(r, q, {
         backend: backend || "auto",
@@ -412,7 +507,7 @@ function usage(exitCode = 1) {
           : ["imports", "dependents"],
         maxRelated: Number.isFinite(maxRelated) ? maxRelated : 30,
         hitsPerFileCap: Number.isFinite(hitsPerFile) ? hitsPerFile : 5,
-        explainHits: hasFlag(process.argv, "--explain-hits"),
+        explainHits: hasFlag(process.argv, "--explain-hits") || prettyOutput,
         rerankMinResolutionPct: Number.isFinite(rerankMinResolution)
           ? rerankMinResolution
           : 90,
@@ -420,7 +515,111 @@ function usage(exitCode = 1) {
         zoektPort: Number.isFinite(zoektPort) ? zoektPort : 6070,
       });
 
-      process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+      if (prettyOutput) {
+        const viz = require("../lib/terminal-viz");
+        const lines = [];
+        
+        lines.push(viz.c(`# Search: "${q}"`, viz.colors.bold, viz.colors.cyan));
+        lines.push("");
+        
+        // Provider info
+        const provider = out.providers?.search?.name || "unknown";
+        const graphAvail = out.providers?.graph?.available ? viz.status("ok", "yes") : viz.status("warn", "no");
+        lines.push(`  ${viz.dim("Provider:")} ${provider}  ${viz.dim("Graph:")} ${graphAvail}`);
+        lines.push("");
+        
+        // Files with relevance bars
+        const files = out.results?.files || [];
+        if (files.length > 0) {
+          lines.push(viz.header("Top Files"));
+          
+          // Find max score for normalization
+          const maxScore = Math.max(...files.map(f => f.bestAdjustedHitScore || f.bestHitScore || 0), 0.01);
+          
+          for (const f of files.slice(0, 10)) {
+            const score = f.bestAdjustedHitScore || f.bestHitScore || 0;
+            const pct = Math.round((score / maxScore) * 100);
+            const relBar = viz.bar(pct, 12, { showPercent: false, thresholds: { warn: 0, danger: 0 } });
+            
+            // Badges
+            const badges = [];
+            if (f.isEntryPoint) badges.push(viz.c("entry", viz.colors.green));
+            if (f.isHotspot) badges.push(viz.c("hotspot", viz.colors.yellow));
+            if (f.fanIn > 0) badges.push(viz.dim(`↓${f.fanIn}`));
+            
+            const badgeStr = badges.length ? ` ${badges.join(" ")}` : "";
+            const scoreStr = score.toFixed(2).padStart(5);
+            
+            lines.push(`  ${relBar} ${viz.c(scoreStr, viz.colors.cyan)} ${f.path}${badgeStr}`);
+          }
+          lines.push("");
+        }
+        
+        // Hits with context
+        const hits = out.results?.hits || [];
+        if (hits.length > 0) {
+          lines.push(viz.header("Hits"));
+          
+          const maxHitScore = Math.max(...hits.map(h => h.adjustedScore || 0), 0.01);
+          let lastPath = null;
+          
+          for (const h of hits.slice(0, 15)) {
+            // Group by file
+            if (h.path !== lastPath) {
+              if (lastPath !== null) lines.push("");
+              lines.push(`  ${viz.c(h.path, viz.colors.bold)}`);
+              lastPath = h.path;
+            }
+            
+            const score = h.adjustedScore || 0;
+            const pct = Math.round((score / maxHitScore) * 100);
+            const miniBar = viz.bar(pct, 8, { showPercent: false, thresholds: { warn: 0, danger: 0 } });
+            
+            const lineNum = h.lineNumber != null ? viz.dim(`:${h.lineNumber}`) : "";
+            const lineText = (h.line || "").trim().slice(0, 60);
+            const signals = h.signals?.length ? viz.dim(` [${h.signals.join(", ")}]`) : "";
+            
+            lines.push(`    ${miniBar} ${lineNum.padEnd(6)} ${lineText}${signals}`);
+          }
+          lines.push("");
+        }
+        
+        // Related files
+        const related = out.results?.related || [];
+        if (related.length > 0) {
+          lines.push(viz.header("Related Files"));
+          
+          const imports = related.filter(r => r.relation === "imports").slice(0, 5);
+          const dependents = related.filter(r => r.relation === "depended_on_by").slice(0, 5);
+          
+          if (imports.length) {
+            lines.push(`  ${viz.dim("Imports:")}`);
+            for (const r of imports) {
+              lines.push(`    → ${r.path} ${viz.dim(`(from ${r.from})`)}`);
+            }
+          }
+          if (dependents.length) {
+            lines.push(`  ${viz.dim("Depended on by:")}`);
+            for (const r of dependents) {
+              lines.push(`    ← ${r.path} ${viz.dim(`(uses ${r.from})`)}`);
+            }
+          }
+          lines.push("");
+        }
+        
+        // Warnings
+        if (out.warnings?.length) {
+          lines.push(viz.header("Warnings"));
+          for (const w of out.warnings) {
+            lines.push(`  ${viz.status("warn", w)}`);
+          }
+          lines.push("");
+        }
+        
+        process.stdout.write(lines.join("\n") + "\n");
+      } else {
+        process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+      }
       break;
     }
 
