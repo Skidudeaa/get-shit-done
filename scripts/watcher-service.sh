@@ -32,8 +32,9 @@ get_project_path() {
 }
 
 # Escape path for systemd instance name
+# Note: Don't use --path flag as it strips leading /
 escape_path() {
-  systemd-escape --path "$1"
+  systemd-escape "$1"
 }
 
 # Ensure systemd user service directory exists and service is installed
