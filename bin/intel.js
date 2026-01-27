@@ -97,7 +97,10 @@ async function readStdinJson() {
 }
 
 function usage(exitCode = 1) {
-  console.log(`Usage:
+  const pkg = require("../package.json");
+  console.log(`codebase-intel v${pkg.version}
+
+Usage:
   codebase-intel init [--root <path> | --roots <a,b> | --roots-file <file>]
   codebase-intel scan [--root/--roots/--roots-file] [--force]
   codebase-intel rescan [--root/--roots/--roots-file] [--force]
@@ -118,6 +121,13 @@ function usage(exitCode = 1) {
 (async () => {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
+
+  // ---- version ----
+  if (cmd === "version" || cmd === "--version" || cmd === "-v") {
+    const pkg = require("../package.json");
+    console.log(`codebase-intel v${pkg.version}`);
+    process.exit(0);
+  }
 
   // ---- hook sessionstart (Claude Code) ----
   if (cmd === "hook" && argv[1] === "sessionstart") {

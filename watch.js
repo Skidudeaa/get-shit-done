@@ -280,7 +280,14 @@ if (require.main === module) {
   const loadRepoConfig = (root) => {
     const p = path.join(root, ".codebase-intel.json");
     const defaults = {
-      globs: ["src/**/*.{ts,tsx,js,jsx,mjs,cjs}", "lib/**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+      globs: [
+        // JavaScript / TypeScript
+        "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+        "lib/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+        "app/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+        // Python
+        "**/*.py",
+      ],
       ignore: [
         "**/node_modules/**",
         "**/.git/**",
@@ -288,6 +295,12 @@ if (require.main === module) {
         "**/dist/**",
         "**/build/**",
         "**/.next/**",
+        // Python
+        "**/__pycache__/**",
+        "**/.venv/**",
+        "**/venv/**",
+        "**/.tox/**",
+        "**/site-packages/**",
       ],
       summaryEverySec: 5,
     };
