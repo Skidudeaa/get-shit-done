@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ARCHITECTURE: Test script for scoring module integration
-# WHY: Validates query expansion and enhanced scoring work end-to-end
+# WHY: Validates enhanced scoring signals work end-to-end
 # TRADEOFF: Manual test script vs full test framework
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
@@ -14,18 +14,7 @@ fail() {
 
 echo "Testing scoring module..."
 
-# Test 1: Query expansion
-node -e "
-const s = require('$ROOT/lib/scoring');
-const r = s.expandQuery('auth');
-if (!r.expanded.includes('authenticate')) {
-  console.error('Expected expanded query to include authenticate');
-  process.exit(1);
-}
-console.log('  Query expansion: OK');
-"
-
-# Test 2: Python symbol extraction
+# Test 1: Python symbol extraction
 node -e "
 const s = require('$ROOT/lib/scoring');
 const sym = s.extractSymbolDef('def authenticate(self):');
@@ -36,7 +25,7 @@ if (sym !== 'authenticate') {
 console.log('  Python symbol extraction: OK');
 "
 
-# Test 3: Python class extraction
+# Test 2: Python class extraction
 node -e "
 const s = require('$ROOT/lib/scoring');
 const sym = s.extractSymbolDef('class AuthHandler(BaseHandler):');
@@ -47,7 +36,7 @@ if (sym !== 'AuthHandler') {
 console.log('  Python class extraction: OK');
 "
 
-# Test 4: Noise word ratio
+# Test 3: Noise word ratio
 node -e "
 const s = require('$ROOT/lib/scoring');
 const noisy = s.noiseWordRatio('return self if True else None');
@@ -59,7 +48,7 @@ if (noisy <= clean) {
 console.log('  Noise word ratio: OK');
 "
 
-# Test 5: isPythonPublicSymbol
+# Test 4: isPythonPublicSymbol
 node -e "
 const s = require('$ROOT/lib/scoring');
 if (!s.isPythonPublicSymbol('def authenticate():')) {
@@ -71,7 +60,7 @@ if (s.isPythonPublicSymbol('def _private():')) {
 console.log('  Python public symbol detection: OK');
 "
 
-# Test 6: Enhanced signals boost exact match
+# Test 5: Enhanced signals boost exact match
 node -e "
 const s = require('$ROOT/lib/scoring');
 const hit = { path: 'auth.py', line: 'def authenticate():', score: 1 };
@@ -87,7 +76,7 @@ if (!r.signals.some(s => s.includes('exact_symbol'))) {
 console.log('  Enhanced signals (exact match boost): OK');
 "
 
-# Test 7: Module loads cleanly
+# Test 6: Module loads cleanly
 node -e "
 const retrieve = require('$ROOT/lib/retrieve');
 console.log('  retrieve module loads: OK');
