@@ -2,29 +2,20 @@
 """
 Parse Python source via stdlib ast and emit imports/exports in JSON.
 
-Input: JSON on stdin:
-  { "path": "relative/path.py", "content": "<file text>" }
+Supports two modes:
 
-Output JSON:
-  {
-    "path": "...",
-    "imports": [
-      {"kind":"import","module":"os","name":null,"asname":null,"level":0},
-      {"kind":"from","module":"pkg.sub","name":"x","asname":"y","level":0},
-      {"kind":"from","module":null,"name":"foo","asname":null,"level":1}
-    ],
-    "exports": {
-      "functions": ["f"],
-      "classes": ["C"],
-      "assignments": ["CONST"],
-      "all": ["a","b"]
-    }
-  }
+1. Extract mode (default):
+   Input: { "path": "relative/path.py", "content": "<file text>" }
+   Output: { "path", "imports", "exports" }
+
+2. Find scopes mode:
+   Input: { "mode": "find_scopes", "content": "<file text>", "lines": [1, 5, 10], "scope_mode": "function"|"class" }
+   Output: { "scopes": { "1": {...}|null, "5": {...}|null, ... } }
 """
 import ast
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _const_str(node: ast.AST) -> Optional[str]:
@@ -55,6 +46,145 @@ def _extract_all(tree: ast.Module) -> Optional[List[str]]:
 def _is_toplevel(node: ast.AST, tree: ast.Module) -> bool:
     """Check if a node is at module top-level (in tree.body)."""
     return node in tree.body
+
+
+def _get_scope_kind(node: ast.AST) -> str:
+    """Get the kind of scope a node represents."""
+    if isinstance(node, ast.ClassDef):
+        return "class"
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        # Check if it's a method (inside a class)
+        return "function"  # Will be refined to "method" based on parent
+    return "unknown"
+
+
+def _find_all_scopes(tree: ast.Module) -> List[Dict[str, Any]]:
+    """
+    Find all function/method/class scopes in the AST.
+    
+    Returns list of:
+      { "name", "kind", "start_line", "end_line", "parent_class": str|None }
+    """
+    scopes = []
+    
+    # Track class context for methods
+    def visit(node: ast.AST, parent_class: Optional[str] = None):
+        if isinstance(node, ast.ClassDef):
+            scopes.append({
+                "name": node.name,
+                "kind": "class",
+                "start_line": node.lineno,
+                "end_line": node.end_lineno or node.lineno,
+                "parent_class": parent_class,
+            })
+            # Visit children with this class as parent
+            for child in ast.iter_child_nodes(node):
+                visit(child, parent_class=node.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            kind = "method" if parent_class else "function"
+            scopes.append({
+                "name": node.name,
+                "kind": kind,
+                "start_line": node.lineno,
+                "end_line": node.end_lineno or node.lineno,
+                "parent_class": parent_class,
+            })
+            # Visit nested functions (no class context)
+            for child in ast.iter_child_nodes(node):
+                visit(child, parent_class=None)
+        else:
+            # Continue visiting children
+            for child in ast.iter_child_nodes(node):
+                visit(child, parent_class=parent_class)
+    
+    for node in tree.body:
+        visit(node)
+    
+    return scopes
+
+
+def _find_enclosing_scope(
+    scopes: List[Dict[str, Any]],
+    line: int,
+    scope_mode: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Find the enclosing scope for a given line number.
+    
+    Args:
+        scopes: List of scope dictionaries
+        line: 1-indexed line number
+        scope_mode: "function" (innermost) or "class" (prefer containing class)
+    
+    Returns:
+        Scope dict or None if line is at module level
+    """
+    # Find all scopes containing this line
+    containing = [
+        s for s in scopes
+        if s["start_line"] <= line <= s["end_line"]
+    ]
+    
+    if not containing:
+        return None
+    
+    # Sort by size (smallest = innermost)
+    containing.sort(key=lambda s: s["end_line"] - s["start_line"])
+    
+    if scope_mode == "function":
+        # Return innermost function/method
+        for s in containing:
+            if s["kind"] in ("function", "method"):
+                return s
+        # Fall back to innermost scope
+        return containing[0]
+    elif scope_mode == "class":
+        # Return containing class if exists
+        for s in containing:
+            if s["kind"] == "class":
+                return s
+        # Fall back to innermost scope
+        return containing[0]
+    
+    return containing[0]
+
+
+def find_enclosing_scopes(
+    content: str,
+    lines: List[int],
+    scope_mode: str = "function"
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """
+    Find enclosing scope for each line number.
+    
+    Args:
+        content: Python source code
+        lines: List of 1-indexed line numbers
+        scope_mode: "function" (innermost) or "class" (include containing class)
+    
+    Returns:
+        Dict mapping line number (as string) to scope info or None
+    """
+    result: Dict[str, Optional[Dict[str, Any]]] = {str(ln): None for ln in lines}
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return result
+    
+    scopes = _find_all_scopes(tree)
+    
+    for ln in lines:
+        scope = _find_enclosing_scope(scopes, ln, scope_mode)
+        if scope:
+            result[str(ln)] = {
+                "name": scope["name"],
+                "kind": scope["kind"],
+                "start_line": scope["start_line"],
+                "end_line": scope["end_line"],
+            }
+    
+    return result
 
 
 def extract(file_path: str, content: str) -> Dict[str, Any]:
@@ -136,10 +266,21 @@ def extract(file_path: str, content: str) -> Dict[str, Any]:
 
 
 def main() -> None:
-    """Read JSON from stdin, extract, write JSON to stdout."""
+    """Read JSON from stdin, dispatch to appropriate mode, write JSON to stdout."""
     data = json.load(sys.stdin)
-    out = extract(data.get("path", ""), data.get("content", ""))
-    json.dump(out, sys.stdout)
+    mode = data.get("mode", "extract")
+    
+    if mode == "find_scopes":
+        # Find enclosing scopes for given line numbers
+        content = data.get("content", "")
+        lines = data.get("lines", [])
+        scope_mode = data.get("scope_mode", "function")
+        scopes = find_enclosing_scopes(content, lines, scope_mode)
+        json.dump({"scopes": scopes}, sys.stdout)
+    else:
+        # Default: extract imports/exports
+        out = extract(data.get("path", ""), data.get("content", ""))
+        json.dump(out, sys.stdout)
 
 
 if __name__ == "__main__":

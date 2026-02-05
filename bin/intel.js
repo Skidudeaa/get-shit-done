@@ -542,13 +542,18 @@ Usage:
       const q = parts.join(" ").trim();
       if (!q) {
         console.error(
-          "Usage: codebase-intel retrieve <query> [--backend auto|zoekt|rg] [--context N] [--max-hits N] [--max-files N] [--expand imports,dependents] [--max-related N] [--hits-per-file N] [--explain-hits] [--rerank-min-resolution N] [--zoekt-build] [--zoekt-port N] [--pretty]"
+          "Usage: codebase-intel retrieve <query> [--backend auto|zoekt|rg] [--context N] [--context-mode lines|function|class] [--max-scope-lines N] [--max-hits N] [--max-files N] [--expand imports,dependents] [--max-related N] [--hits-per-file N] [--explain-hits] [--rerank-min-resolution N] [--zoekt-build] [--zoekt-port N] [--pretty]"
         );
         process.exit(1);
       }
 
       const backend = flag(process.argv, "--backend");
       const contextLines = parseInt(flag(process.argv, "--context") || "", 10);
+      const contextModeRaw = (flag(process.argv, "--context-mode") || "").toLowerCase();
+      const contextMode = ["lines", "function", "class"].includes(contextModeRaw)
+        ? contextModeRaw
+        : "lines";
+      const maxScopeLines = parseInt(flag(process.argv, "--max-scope-lines") || "", 10);
       const maxHits = parseInt(flag(process.argv, "--max-hits") || "", 10);
       const maxFiles = parseInt(flag(process.argv, "--max-files") || "", 10);
       const maxRelated = parseInt(flag(process.argv, "--max-related") || "", 10);
@@ -561,6 +566,8 @@ Usage:
       const out = await retrieve(r, q, {
         backend: backend || "auto",
         contextLines: Number.isFinite(contextLines) ? contextLines : 1,
+        contextMode,
+        maxScopeLines: Number.isFinite(maxScopeLines) ? maxScopeLines : 200,
         maxHits: Number.isFinite(maxHits) ? maxHits : 50,
         maxSeedFiles: Number.isFinite(maxFiles) ? maxFiles : 10,
         expand: expandRaw
