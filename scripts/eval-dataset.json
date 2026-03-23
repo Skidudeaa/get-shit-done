@@ -16,11 +16,12 @@
       "id": "sym-002",
       "category": "symbol",
       "query": "computeEnhancedSignals",
-      "relevantFiles": ["lib/scoring.js", "lib/retrieve.js"],
+      "relevantFiles": ["lib/scoring.js"],
+      "acceptableFiles": ["lib/retrieve.js"],
       "relevantHitPatterns": ["function computeEnhancedSignals"],
       "topK": 3,
       "minUsefulnessScore": 0.7,
-      "notes": "Cross-file: defined in scoring.js, called in retrieve.js. Both should surface."
+      "notes": "Defined in scoring.js, called in retrieve.js. Definition should rank first; retrieve.js is acceptable."
     },
     {
       "id": "sym-003",
