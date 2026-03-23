@@ -58,45 +58,57 @@ function renderBanner(healthData, root) {
   const hotspots = m.hotspots || [];
   const topMisses = m.topMisses ?? healthData?.topMisses ?? [];
 
-  // Health status
+  // Derived labels
   const healthStatus = resPct >= 90 ? "ok" : resPct >= 70 ? "warn" : "error";
-  const graphLabel = resPct >= 90 ? viz.c("enabled", viz.colors.green) : viz.c("gated", viz.colors.yellow);
-
-  // Watcher status
-  const watcher = getWatcherStatus(root);
-  const watcherLabel = watcher.running
-    ? viz.c("running", viz.colors.green) + viz.dim(" (" + viz.formatAge(watcher.ageSec) + " ago)")
-    : viz.c("off", viz.colors.yellow);
-
-  // Git branch
+  const boostLabel = resPct >= 90 ? viz.c("✓", viz.colors.green) : viz.c("gated", viz.colors.yellow);
   const branch = getGitBranch(root);
-  const branchLabel = branch ? viz.c(branch, viz.colors.magenta) : viz.dim("n/a");
+  const watcher = getWatcherStatus(root);
+  const search = getSearchBackend(root);
 
-  // Search backend
-  const searchLabel = viz.dim(getSearchBackend(root));
+  // Header line: name + branch + search
+  const headerRight = [
+    branch ? viz.c(branch, viz.colors.magenta) : null,
+    viz.dim(search),
+  ].filter(Boolean).join(viz.dim(" · "));
 
+  // Build hotspot mini-bars
+  const maxFanIn = hotspots.length > 0 ? Math.max(...hotspots.map(h => h.fanIn || 1)) : 1;
+  const hotspotLines = hotspots.slice(0, 5).map(h => {
+    const name = (h.path || h).split("/").pop();
+    const fi = h.fanIn || 0;
+    const barLen = Math.max(1, Math.round((fi / maxFanIn) * 8));
+    return `  ${viz.dim("▪".repeat(barLen))}${"·".repeat(Math.max(0, 8 - barLen))} ${viz.c(name, viz.colors.white)} ${viz.dim(String(fi))}`;
+  });
+
+  // Assemble sections
   const lines = [
-    viz.c("codebase-intel", viz.colors.bold, viz.colors.cyan) + "  " + viz.dim("v0.1.0") + "  " + viz.dim("branch:") + branchLabel,
+    viz.c("codebase-intel", viz.colors.bold, viz.colors.cyan) + "                   " + headerRight,
     "",
-    viz.status(healthStatus, `resolution ${resPct}% (${resolved}/${total})  `) + viz.bar(resPct, 15, { showPercent: false }),
-    viz.dim(`  files: ${files}  graph: ${graphFiles} nodes  boosts: `) + graphLabel + viz.dim(`  age: `) + viz.ageStatus(ageSec),
-    viz.dim(`  watcher: `) + watcherLabel + viz.dim(`  search: `) + searchLabel,
+    viz.status(healthStatus, `${resPct}%`) + "  " + viz.bar(resPct, 20, { showPercent: false }) + "  " + viz.dim(`${resolved}/${total} imports resolved`),
+    "",
+    viz.dim("  files ")  + viz.c(String(files), viz.colors.white) + viz.dim("  ·  graph ") + viz.c(String(graphFiles), viz.colors.white) + viz.dim(" nodes  ·  boosts ") + boostLabel + viz.dim("  ·  age ") + viz.ageStatus(ageSec),
+    viz.dim("  watcher ") + (watcher.running
+      ? viz.c("⟳ live", viz.colors.green) + viz.dim(" · " + viz.formatAge(watcher.ageSec) + " ago")
+      : viz.c("⏸ off", viz.colors.yellow) + viz.dim(" · run: codebase-intel watch")),
   ];
 
-  // Hotspots
-  if (hotspots.length > 0) {
+  // Hotspots section (after divider)
+  if (hotspotLines.length > 0) {
     lines.push("");
-    lines.push(viz.c("  hotspots", viz.colors.dim) + "  " + hotspots.slice(0, 4).map(h =>
-      viz.c(h.path || h, viz.colors.white) + viz.dim("(" + (h.fanIn || "?") + ")")
-    ).join("  "));
+    lines.push(viz.dim("  dependency hotspots") + "                          " + viz.dim("fan-in"));
+    lines.push(...hotspotLines);
   }
 
-  // Top unresolved (only if health is bad)
+  // Unresolved misses (only when health is bad)
   if (resPct < 90 && topMisses.length > 0) {
-    lines.push(viz.dim("  misses  ") + topMisses.slice(0, 3).map(m => viz.c(m[0], viz.colors.yellow)).join(", "));
+    lines.push("");
+    lines.push(viz.dim("  unresolved ") + topMisses.slice(0, 4).map(m =>
+      viz.c(m[0], viz.colors.yellow) + viz.dim("×" + m[1])
+    ).join(viz.dim("  ")));
   }
 
-  return viz.box(lines, { title: viz.c("◆", viz.colors.cyan) });
+  const dividerIdx = 5; // after the watcher line
+  return viz.box(lines, { title: viz.c(" ◆ ", viz.colors.bold, viz.colors.cyan), rounded: true, dividerAfter: hotspotLines.length > 0 ? dividerIdx : -1 });
 }
 
 function renderStatusLine(healthData, changed, root) {
@@ -105,12 +117,12 @@ function renderStatusLine(healthData, changed, root) {
   const files = m.indexedFiles ?? 0;
   const ageSec = m.indexAgeSec ?? 0;
 
-  const healthIcon = resPct >= 90 ? viz.c("◆", viz.colors.green) : resPct >= 70 ? viz.c("◆", viz.colors.yellow) : viz.c("◆", viz.colors.red);
+  const dot = resPct >= 90 ? viz.c("◆", viz.colors.green) : resPct >= 70 ? viz.c("◆", viz.colors.yellow) : viz.c("◆", viz.colors.red);
   const watcher = getWatcherStatus(root);
   const watchIcon = watcher.running ? viz.c("⟳", viz.colors.green) : viz.c("⏸", viz.colors.yellow);
-  const changeNote = changed ? viz.c(" ↻ context refreshed", viz.colors.cyan) : "";
+  const changeNote = changed ? "  " + viz.c("↻ context refreshed", viz.colors.cyan) : "";
 
-  return `${healthIcon} ${viz.dim("intel")} ${resPct}% ${viz.dim(files + " files")} ${watchIcon} ${viz.ageStatus(ageSec)}${changeNote}`;
+  return `${dot} ${viz.dim("intel")} ${resPct}% ${viz.dim("·")} ${files} files ${viz.dim("·")} ${watchIcon} ${viz.dim("·")} ${viz.ageStatus(ageSec)}${changeNote}`;
 }
 
 function flag(argv, name) {
@@ -255,12 +267,14 @@ Usage:
     // stderr → visible to user in terminal
     try {
       const health = await intel.health(root);
-      // Enrich with hotspot names from summary
-      const hotspotRe = /`([^`]+)`[:\s]+(\d+)/g;
+      // Parse hotspots from summary — handles both formats:
+      //   `lib/intel.js`: 5         (new format)
+      //   `lib-intel` (fan-in 5)    (old format)
+      const hotspotRe = /`([^`]+)`(?:\s*:\s*(\d+)|\s*\(fan-in\s+(\d+)\))/g;
       const hotspots = [];
       let hm;
       while ((hm = hotspotRe.exec(summary)) !== null) {
-        hotspots.push({ path: hm[1], fanIn: parseInt(hm[2], 10) });
+        hotspots.push({ path: hm[1], fanIn: parseInt(hm[2] || hm[3], 10) });
       }
       if (health.metrics) health.metrics.hotspots = hotspots;
       process.stderr.write(renderBanner(health, root) + "\n");
