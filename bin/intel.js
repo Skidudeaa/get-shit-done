@@ -280,6 +280,20 @@ Usage:
       process.stderr.write(renderBanner(health, root) + "\n");
     } catch {}
 
+    // Auto-start watcher if not running
+    try {
+      const ws = getWatcherStatus(root);
+      if (!ws.running) {
+        const { spawn: spawnChild } = require("child_process");
+        const child = spawnChild("codebase-intel", ["watch"], {
+          cwd: root,
+          stdio: "ignore",
+          detached: true,
+        });
+        child.unref();
+      }
+    } catch {}
+
     process.exit(0);
   }
 
@@ -351,6 +365,46 @@ Usage:
     process.stdout.write(
       `<codebase-intelligence>\n${summary.trim()}\n</codebase-intelligence>`
     );
+    process.exit(0);
+  }
+
+  // ---- watch-start: start watcher in background ----
+  if (cmd === "watch-start") {
+    const root = process.cwd();
+    const ws = getWatcherStatus(root);
+    if (ws.running) {
+      console.log("watcher already running (" + ws.ageSec + "s ago)");
+      process.exit(0);
+    }
+    const { spawn: spawnChild } = require("child_process");
+    const child = spawnChild("codebase-intel", ["watch"], {
+      cwd: root,
+      stdio: "ignore",
+      detached: true,
+    });
+    child.unref();
+    console.log("watcher started (pid " + child.pid + ")");
+    process.exit(0);
+  }
+
+  // ---- watch-stop: kill the watcher ----
+  if (cmd === "watch-stop") {
+    const root = process.cwd();
+    const hbPath = path.join(root, ".planning", "intel", ".watcher_heartbeat");
+    // Find and kill the watcher process
+    try {
+      const { execSync } = require("child_process");
+      const pids = execSync("pgrep -f 'codebase-intel watch'", { encoding: "utf8" }).trim().split("\n");
+      for (const pid of pids) {
+        if (pid && pid !== String(process.pid)) {
+          process.kill(parseInt(pid, 10), "SIGTERM");
+        }
+      }
+      if (fs.existsSync(hbPath)) fs.unlinkSync(hbPath);
+      console.log("watcher stopped");
+    } catch {
+      console.log("no watcher running");
+    }
     process.exit(0);
   }
 
