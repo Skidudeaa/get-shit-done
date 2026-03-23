@@ -76,3 +76,5 @@ All state lives in `.planning/intel/` (never committed):
 - **Queue serialization**: all operations on a root are serialized through a promise chain to prevent concurrent SQLite access
 - **Summary is clamped**: hard-capped at ~2200 chars to stay within useful context budget
 - **Per-repo config**: `.codebase-intel.json` at repo root overrides default globs, ignore patterns, and summary throttle interval
+- **Periodic heartbeats**: background processes (watcher) must ping a heartbeat file periodically, not just on activity — idle processes that only write on flush look dead to status monitors
+- **No redundant metrics**: don't display values that are always identical (e.g., indexed files vs graph nodes are always equal)
