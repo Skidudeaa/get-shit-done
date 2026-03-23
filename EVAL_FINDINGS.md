@@ -21,45 +21,55 @@ Fixed in `c578e94` by normalizing hit paths before graph lookups.
 
 ---
 
-## Current Baseline (post-fix)
+## Scoring Evolution
+
+### v1 Baseline (post path-normalization fix, c578e94)
 
 | Metric           | Score  |
 |------------------|--------|
-| Mean P@k         | 0.802  |
+| Mean P@k         | 0.756  |
 | Mean MRR         | 0.838  |
 | Mean nDCG        | 0.920  |
-| Mean Usefulness  | 0.930  |
-| Graph Lift P@k   | +0.017 |
+| Mean Usefulness  | 0.921  |
+| Graph Lift P@k   | +0.011 |
 | Graph Lift nDCG  | -0.044 |
 
 19 cases across 7 categories: symbol lookup, multi-word, path, cross-file, scoring, scope, negative.
 
----
+### v1 Key Finding: Graph Boosts Help Breadth, Hurt Definitions
 
-## Key Finding: Graph Boosts Help Breadth, Hurt Definitions
+Graph boosts improved precision (pulling relevant files into the top-k) but degraded ranking (pushing hub files above definition files). Root cause: fan-in didn't distinguish a file that **defines** a symbol from one that merely **imports** it. `intel.js` imports nearly everything, so it accumulated the highest fan-in and was promoted above actual definition files.
 
-Graph boosts improve precision (pulling relevant files into the top-k) but degrade ranking (pushing hub files above definition files).
+### v2 Fixes Applied (bb18522, dbb9348)
 
-### Where graph boosts help
+Three-pronged fix:
 
-| Case | Effect |
-|------|--------|
-| `multi-003` "resolutionPct" | Promotes `intel.js` (fan-in=5) from rank 4 to rank 1. **+0.20 P@k lift.** |
-| `cross-003` "extractImports" | Promotes `intel.js` into top-5, displacing `CHANGELOG.md`. **+0.10 P@k lift.** |
+1. **`exact_symbol` weight raised +25% → +40%** (`scoring.js`). The original +25% was too weak to overcome fan-in promotion on hub files.
+2. **Definition-site priority signal +25%** (`retrieve.js`). Fires when a hit line is a function/class definition AND the query matches the symbol name. Tags hits with `_hasDefSiteMatch` for use in the suppression pass.
+3. **Fan-in suppression pass** (`retrieve.js`). After initial scoring, if any hit has a definition-site match, the fan-in/hotspot boost is halved for hits in files without such a match. Prevents `intel.js` from outranking definition files.
+4. **File sort: bestAdjustedHitScore promoted to primary key** (`retrieve.js`). The linchpin fix — `rerankFiles` previously sorted by raw fan-in before adjusted scores, so all hit-level scoring signals were ignored at the file level. Now sorts by `bestAdjustedHitScore` first, with fan-in as a tiebreaker.
 
-### Where graph boosts hurt
+### v2 Results (post-fix)
 
-| Case | Effect |
-|------|--------|
-| `sym-002` "computeEnhancedSignals" | `retrieve.js` (fan-in=2) overtakes `scoring.js` where the function is defined. MRR drops 1.0 → 0.5. |
-| `path-001` "resolveImport" | `intel.js` (fan-in=5) overtakes `resolver.js` where the function is defined. MRR drops 1.0 → 0.5. |
-| `path-002` "writeSummaryMarkdown" | `intel.js` overtakes `summary.js` where the function is defined. MRR drops 1.0 → 0.5. |
+| Metric           | v1     | v2     | Delta   |
+|------------------|--------|--------|---------|
+| Mean P@k         | 0.756  | 0.746  | -0.010  |
+| Mean MRR         | 0.838  | **0.931** | **+0.093** |
+| Mean nDCG        | 0.920  | **0.966** | **+0.046** |
+| Mean Usefulness  | 0.921  | **0.934** | +0.013  |
+| Graph Lift P@k   | +0.011 | +0.011 | 0.000   |
+| Graph Lift nDCG  | -0.044 | **0.001** | **+0.045** |
 
-**Net nDCG lift: -0.044.** The graph is hurting overall ranking quality.
+**Graph boosts are no longer harmful.** nDCG lift went from -0.044 to neutral.
 
-### Root cause
+### Cases fixed by v2
 
-The fan-in boost doesn't distinguish between a file that **defines** a symbol and a file that merely **imports** it. `intel.js` imports nearly everything, so it accumulates the highest fan-in and gets promoted above the actual definition files. The `exact_symbol:+25%` scoring signal fires correctly on definition lines (visible via `--verbose`), but it's overwhelmed by the fan-in boost on hub files.
+| Case | v1 Rank | v2 Rank | MRR Change |
+|------|---------|---------|------------|
+| `sym-002` "computeEnhancedSignals" | 1.retrieve.js 2.scoring.js | **1.scoring.js** 2.retrieve.js | 0.5 → 1.0 |
+| `sym-005` "extractSymbolDef" | 1.scoring.js (no regression) | **1.scoring.js** (stayed correct) | 1.0 → 1.0 |
+| `path-001` "resolveImport" | 1.intel.js 2.resolver.js | **1.resolver.js** 2.intel.js | 0.5 → 1.0 |
+| `path-002` "writeSummaryMarkdown" | 1.intel.js 2.summary.js | **1.summary.js** 2.intel.js | 0.5 → 1.0 |
 
 ---
 
@@ -88,10 +98,18 @@ The eval dataset and harness script contain query terms (self-referential). Resu
 
 ## What To Fix Next
 
-The scoring system needs to differentiate definition sites from call sites. Options:
+### Import Resolution Gap
 
-1. **Cap fan-in boost when `exact_symbol` fires elsewhere.** If another file in the result set has an exact symbol match, reduce the fan-in boost for competing files.
-2. **Increase `exact_symbol` weight.** Currently +25% of base, which doesn't overcome fan-in on hub files. Raising to +40-50% might be enough.
-3. **Add a definition-line priority signal.** When a hit is a `function`/`class` definition line AND matches the query exactly, give it a stronger boost than generic fan-in.
+The tool currently resolves ~54% of local imports on real repos (history.json shows 31/57). This is below the 90% health gate, meaning graph boosts are disabled in practice. Root causes identified:
 
-The eval harness can measure the effect of any of these changes immediately.
+1. **Old index format entries** (~9 imports) — files indexed with absolute path keys and plain-string import arrays lack resolution data. A full re-index fixes these immediately.
+2. **Regex extraction limitations** — template string imports (`require(\`./\${name}\`)`) and computed specifiers are silently missed by the JS extractor.
+3. **Python namespace packages** — resolver checks for `__init__.py` but PEP 420 namespace packages don't require it.
+
+**Quick win**: delete `.planning/intel/index.json` and re-scan to fix the format-based unresolved imports (~11% resolution improvement for free).
+
+### Remaining Scoring Opportunities
+
+- **P@k** dropped slightly (0.756 → 0.746) — worth investigating whether any relevant files are being pushed out of top-k
+- `cross-003` "extractImports" has MRR 0.500 because `index.js` (entry point boost) outranks the definition files. Consider whether entry point should yield to definition-site matches.
+- `multi-003` "resolutionPct" has MRR 0.250 — this is a variable (not a definition) spread across many files, so the current scoring is reasonable.
