@@ -153,6 +153,10 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
       dashState.indexedFiles = h.index?.files ?? h.metrics?.indexedFiles ?? null;
     } catch {}
 
+    // WHY: Periodic heartbeat keeps the status line showing "live" even when
+    // no files are changing.  Without this, an idle watcher looks dead after 120s.
+    const heartbeatInterval = setInterval(() => writeHeartbeat(root), 30000);
+
     const pending = new Set();
     const flush = debounce(async () => {
       const files = [...pending];
@@ -257,6 +261,7 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
         await w.close();
       } catch {}
     }
+    clearInterval(heartbeatInterval);
     for (const r of roots) clearHeartbeat(r);
     process.exit(0);
   };
