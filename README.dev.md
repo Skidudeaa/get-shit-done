@@ -1,179 +1,108 @@
-# codebase-intel — Developer Notes
+# Developer Notes
 
-This document is for **maintaining and operating** the system, not explaining it.
+For maintaining and operating the system.
 
----
-
-## Architecture (mental model)
-
-- **Global CLI**: one binary (`codebase-intel`) installed once
-- **Per-repo state**: `.planning/intel/`
-- **Watcher**: keeps state fresh
-- **Hooks**:
-  - SessionStart → baseline injection
-  - UserPromptSubmit → refresh if changed (per-session dedupe)
-
-No background magic. Everything is explicit.
-
----
-
-## Repo layout (core)
+## Layout
 
 ```
-bin/
-  intel.js          # CLI entrypoint
+bin/intel.js              CLI entrypoint
 lib/
-  intel.js          # orchestration (init/scan/update/health)
-  summary.js        # bounded summary + alerts
-  retrieve.js       # search + graph + rerank
-  resolver.js       # local import resolution
-  graph.js          # SQLite helpers
+  intel.js                orchestration (init/scan/update/health/auto-migrate)
+  retrieve.js             search + scoring + graph rerank
+  scoring.js              symbol detection, noise penalty, enhanced signals
+  resolver.js             import → file path resolution
+  graph.js                SQLite dependency graph
+  summary.js              bounded summary generation + health alerts
+  rg.js                   ripgrep backend (source-first two-phase collection)
+  scope-finder.js         function/class scope context for hits
+  zoekt.js                Zoekt backend (optional)
   extractors/
-    javascript.js   # JS/TS extractor
-    python_ast.py   # Python AST extractor
-    python.js       # Node wrapper
+    javascript.js         JS/TS regex extractor
+    python_ast.py          Python AST extractor
+    python.js             Node wrapper for python_ast.py
 scripts/
-  setup.sh          # one-command project setup
-test/
-  test-refresh.sh   # refresh hook regression tests
+  eval-retrieve.js        retrieval evaluation harness (19 cases)
+  eval-dataset.json       eval test cases
+  setup.sh                one-command project deployment
+  test-refresh.sh         refresh hook regression tests
 ```
 
----
+## Hooks
 
-## Per-repo state (never commit)
+Wired into `.claude/settings.json` by `init`:
 
-```
-.planning/intel/
-  graph.db
-  index.json
-  summary.md
-  .last_injected_hash.*
-```
+- **SessionStart**: injects summary on session start/resume
+- **UserPromptSubmit**: re-injects if summary changed (per-session SHA-256 dedupe)
 
-Add `.planning/` to `.gitignore`.
-
----
-
-## Live refresh (important)
-
-Live refresh requires **both**:
-
-1. Watcher running:
-   ```bash
-   codebase-intel watch --summary-every 5
-   ```
-
-2. Hooks wired (done by `init`):
-   - SessionStart
-   - UserPromptSubmit
-
-Refresh is:
-- deduped per session
-- emitted only when summary content changes
-- injected under the same `<codebase-intelligence>` tag
-
----
+Both emit under `<codebase-intelligence>` XML tag.
 
 ## Health semantics
 
-- Resolution ≥ 95% → healthy
-- 90–94% → watch it
-- < 90% → graph boosts are gated
-- Large index age → watcher not running
+- Resolution >= 90%: graph boosts enabled
+- Resolution < 90%: graph boosts gated (degrade, don't guess)
+- Large index age: watcher not running
 
-Health is advisory but enforced in ranking.
+## Index auto-migration
 
----
+`INDEX_VERSION` tracks format changes. On load, `migrateIndexIfNeeded()`:
+- Normalizes absolute-path keys to relative
+- Clears stale string imports
+- Triggers immediate re-extraction of affected files
+- No manual rescan needed
 
-## Python specifics (intentionally limited)
+## Scoring signals (in order of strength)
 
-**Parsing**: stdlib AST (correct syntax handling)
+| Signal | Weight | Where |
+|--------|--------|-------|
+| `exact_symbol` | +40% | scoring.js — definition line symbol matches query |
+| `def_site_priority` | +25% | retrieve.js — definition line + query match |
+| `hotspot` | +15% | retrieve.js — file in top-5 fan-in |
+| `symbol_contains_query` | +12% | scoring.js — symbol name contains query term |
+| `export_match` | +10% | scoring.js — export statement with query term |
+| `entrypoint` | +10% | retrieve.js — file matches entry point pattern |
+| `python_public` | +8% | scoring.js — public Python symbol |
+| `docstring_match` | +5% | scoring.js — Python docstring/comment |
+| `exportline` | +5% | retrieve.js — generic export line |
+| `defline` | +3% | retrieve.js — generic definition line |
+| `fanin` | +1–4% | retrieve.js — logarithmic fan-in boost |
+| `doc` | -40% | retrieve.js — markdown/rst/changelog files |
+| `test` | -25% | retrieve.js — test directory/file |
+| `noise_ratio` | -8–15% | scoring.js — high keyword noise ratio |
+| `vendor` | -50% | retrieve.js — node_modules/dist/build |
+| `fanin_suppressed` | varies | retrieve.js — halves graph boost when def match exists |
 
-**Resolution**:
-- relative imports
-- local package imports
+## rg two-phase collection
 
-**Not supported**:
-- venv / sys.path
-- namespace packages
-- runtime discovery
+Phase 1: source files only (`.js`, `.py`, `.go`, `.rs`, etc.) — guarantees definitions reach scorer.
+Phase 2: remaining capacity filled with docs/config.
 
-This is by design. Do not fake correctness.
+Raw limit inflated to 5x `maxHits` for candidate diversity.
 
----
-
-## When to rescan
-
-- after large refactors
-- after mass renames
-- if health looks wrong
-
-```bash
-codebase-intel scan
-```
-
----
-
-## Things NOT to add casually
-
-- Embeddings
-- LLM calls
-- Semantic claims (LSP-like behavior)
-- Multi-language explosion
-- Huge summaries
-
-Use health metrics to justify changes.
-
----
-
-## Release discipline
-
-- Tag releases
-- Keep JSON contracts stable
-- Prefer additive changes
-
----
-
-## Deploying to a new project
+## Eval harness
 
 ```bash
-cd /path/to/project
-/path/to/codebase-intel/scripts/setup.sh
+node scripts/eval-retrieve.js             # terminal
+node scripts/eval-retrieve.js --verbose   # hit details + signals
+node scripts/eval-retrieve.js --json      # machine-readable
 ```
 
-The script:
-1. Checks `codebase-intel` is on PATH
-2. Runs `init` + `scan`
-3. Shows `doctor` output
-4. Adds `.planning/` to `.gitignore`
-5. Prints watcher command
-
----
-
-## Doctor command
-
-```bash
-codebase-intel doctor
-```
-
-Outputs:
-- State file checks (graph.db, index.json, summary.md, hooks)
-- Health metrics (resolution %, index age)
-- Top unresolved imports
-- Active config globs
-- Search backend availability (rg, zoekt)
-- Actionable hints
-
-This is the first command to run when "something feels off".
-
----
+19 cases, 7 categories. Measures P@k, MRR, nDCG, usefulness, graph lift.
 
 ## Debugging
 
 ```bash
-codebase-intel doctor                    # full diagnosis
-codebase-intel health                    # raw metrics (JSON)
-codebase-intel summary                   # see what Claude receives
-ls -la .planning/intel/.last_injected_hash.*  # session hashes
-./test/test-refresh.sh                   # run regression tests
+codebase-intel doctor                          # full diagnosis
+codebase-intel health                          # raw metrics JSON
+codebase-intel summary                         # what Claude receives
+node scripts/eval-retrieve.js --verbose        # scoring debug
+ls -la .planning/intel/.last_injected_hash.*   # session dedupe state
 ```
+
+## What not to add
+
+- Embeddings or vector search
+- LLM calls in the pipeline
+- Semantic claims (LSP-like)
+- Summaries > 2200 chars
+
+Use eval metrics to justify changes.

@@ -1,134 +1,95 @@
 # codebase-intel
 
-**Health-aware codebase intelligence for LLMs.**
+Health-aware codebase intelligence for LLM coding agents.
 
-`codebase-intel` is a lightweight, health-aware codebase intelligence service designed
-to keep LLM coding agents oriented, honest, and up-to-date while working in real
-repositories.
+Maps repository structure, tracks import health, and injects a factual summary into Claude Code sessions — so the model starts oriented, not guessing.
 
-It continuously maps a repository's structure and injects a small, factual summary
-into Claude Code so the model starts every session oriented, not guessing. It is
-designed to prevent the most common LLM failure mode: **hallucinating structure due
-to missing or stale context.**
-
----
-
-## What it does
-
-- Indexes real structure in JavaScript, TypeScript, and Python by extracting
-  imports/exports (AST-based for Python) and building a dependency graph
-- Resolves local imports deterministically (relative paths, TS path aliases,
-  workspaces, Python relative/local modules) and records unresolved cases explicitly
-- Tracks health metrics—import resolution %, index age, and top misses—so the
-  system knows when its model of the repo is trustworthy and when it is not
-- Generates a bounded, factual summary (hotspots, entry points, recent changes,
-  health) stored on disk as the single source of truth
-- Injects that summary into Claude Code:
-  - once at SessionStart to establish orientation
-  - mid-session when the summary changes (deduped per session)
-- Provides structured retrieval via `retrieve`, combining search (rg or Zoekt)
-  with graph-aware reranking and limited neighbor expansion
-
----
-
-## Why it exists
-
-LLM coding failures are usually orientation failures: the model starts in the
-wrong files, misses blast radius, or hallucinates structure from incomplete
-context. Search alone helps after confusion begins and often amplifies noise.
-
-`codebase-intel` solves this by:
-- establishing an accurate mental map before the first prompt,
-- keeping that map fresh while the session is ongoing,
-- and making drift visible and actionable instead of silent.
-
-The result is not "smarter" models, but more reliable ones—agents that start in
-the right place, understand impact, and know when their understanding is degraded.
-
----
-
-## Installation (once per machine)
+## Install
 
 ```bash
-cd /path/to/codebase-intel
-npm install
-npm link
-```
-
-Verify:
-
-```bash
+npm install && npm link
 codebase-intel --help
 ```
 
----
-
-## Using it in a project
+## Use
 
 ```bash
 cd /path/to/project
-./path/to/codebase-intel/scripts/setup.sh
+codebase-intel init          # wire hooks + create state dir
+codebase-intel scan          # index files, build graph
+codebase-intel watch         # live updates with dashboard
 ```
 
-Or manually:
-
-```bash
-codebase-intel init
-codebase-intel scan
-codebase-intel watch --summary-every 5
-```
-
-That's it.
-
-Claude Code will now receive codebase intelligence automatically.
-
----
+Claude Code receives codebase intelligence automatically via hooks.
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---------|-------------|
-| `init` | Initialize repo state and wire Claude hooks |
-| `scan [--force]` | Full index (skips unchanged files unless forced) |
+| `init` | Create `.planning/intel/`, wire Claude hooks |
+| `scan [--force]` | Index imports/exports, build dependency graph |
 | `rescan [--force]` | Scan + prune deleted files |
-| `watch` | Live updates with dashboard |
-| `health [--pretty]` | Show resolution %, index age |
-| `doctor` | Visual diagnostic dashboard with trends |
-| `summary` | Print injected summary |
-| `retrieve <query> [--pretty]` | Ranked search with graph context |
+| `watch` | Live file watching with terminal dashboard |
+| `health` | Resolution %, index age, top unresolved |
+| `doctor` | Visual diagnostic with trends and hints |
+| `summary` | Print what Claude sees |
+| `retrieve <query>` | Ranked search with graph context |
 
----
+## How it works
 
-## Visual Features
+1. **Extract** — parse imports/exports from JS/TS (regex) and Python (AST)
+2. **Resolve** — map import specifiers to file paths (relative, tsconfig, workspace, Python dot-notation)
+3. **Graph** — store dependency edges in SQLite, compute fan-in/hotspots
+4. **Summarize** — generate bounded markdown (<2200 chars): health, hotspots, entry points, recent changes
+5. **Inject** — push summary into Claude Code at session start and on change
+6. **Retrieve** — two-phase rg search (source files first), score with definition-site priority, rerank with graph
 
-The CLI includes rich terminal visualizations:
+## Scoring pipeline
+
+Retrieval combines text search with structural reranking:
+
+- **Source-first collection**: rg searches source files before docs/config, preventing changelog saturation
+- **Definition-site priority** (+25%): boosts function/class definitions matching the query
+- **Exact symbol match** (+40%): strong boost when a definition line's symbol name matches the query exactly
+- **Fan-in suppression**: halves graph boost on hub files when a definition match exists elsewhere
+- **Penalties**: test (-25%), vendor (-50%), doc/changelog (-40%)
+- **Health gating**: graph boosts disabled below 90% import resolution
+
+## Languages
+
+- JavaScript / TypeScript (regex extraction)
+- Python (AST extraction via stdlib `ast`)
+
+## Cross-project validation
+
+Tested against Express (142 files), Flask (83 files), React (4,337 files):
+
+| Metric | Score |
+|--------|-------|
+| MRR | 0.935 |
+| nDCG | 0.969 |
+| Import resolution | 96–100% |
+
+## Config
+
+Optional `.codebase-intel.json` at repo root:
+
+```json
+{
+  "globs": ["**/*.{js,ts,py}"],
+  "ignore": ["legacy/**"],
+  "summaryThrottleMs": 5000
+}
+```
+
+## State
+
+All state in `.planning/intel/` (never commit):
 
 ```
-## Health
-  resolution        ████████████░░░░░░░░ 62%  23/37
-
-  Trends            (10 snapshots)
-  resolution        ▁▃▄▃▅▇▆█▇▅  55% → 62%  +7%
-  files             ▁▂▃▄▅▅▆▇▇█  18 → 25  +7
+graph.db              SQLite dependency graph
+index.json            file metadata + import/export records
+summary.md            injected summary
+history.json          health trend snapshots
+.last_injected_hash.* per-session dedupe
 ```
-
-- **Progress bars** during scan/rescan
-- **Sparklines** for health trends over time
-- **Live dashboard** during watch mode
-- **Relevance bars** in search results (`retrieve --pretty`)
-
----
-
-## Supported languages
-
-- JavaScript
-- TypeScript
-- Python (AST-based parsing)
-
----
-
-## Status
-
-**v0.1.0** — Experimental but stable
-
-Designed for real use across multiple repositories.

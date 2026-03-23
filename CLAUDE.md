@@ -14,26 +14,24 @@ It is **not** a semantic code understanding engine, LSP, vector database, or IDE
 npm install          # install dependencies (chokidar, fast-glob, sql.js)
 npm link             # make `codebase-intel` globally available
 npm test             # runs scripts/test-refresh.sh (refresh hook regression tests)
-./test/test-refresh.sh  # alternate path for the same tests
 ```
 
-There is no build step. CommonJS throughout, no transpilation.
+No build step. CommonJS throughout, no transpilation.
 
 ## Architecture
 
-### Data Flow
+### Pipeline
 
 1. **Extractors** (`lib/extractors/`) parse imports/exports from source files
    - JS/TS: regex-based (`javascript.js`)
-   - Python: shells to `python_ast.py` for AST-based extraction (`python.js`)
-   - Registry pattern: `extractors/index.js` maps extensions to extractors
+   - Python: AST-based via `python_ast.py` (`python.js`)
 
-2. **Resolver** (`lib/resolver.js`) resolves import specifiers to file paths
+2. **Resolver** (`lib/resolver.js`) maps import specifiers to file paths
    - JS/TS: relative paths, tsconfig `paths`/`baseUrl`, workspace packages
    - Python: relative imports (dot notation), local package imports
    - Returns `{ specifier, resolved, kind }` where kind is `relative|external|tsconfig|workspace|asset|unresolved`
 
-3. **Graph** (`lib/graph.js`) stores the dependency graph in SQLite (via sql.js, in-memory + disk persistence)
+3. **Graph** (`lib/graph.js`) stores the dependency graph in SQLite (via sql.js)
    - Tables: `files`, `imports`, `exports`, `meta`
    - Provides fan-in/fan-out queries, neighbor expansion, hotspot detection
 
@@ -41,42 +39,40 @@ There is no build step. CommonJS throughout, no transpilation.
    - Per-root state management via `stateByRoot` Map
    - Serialized operations via `withQueue()` promise chain
    - Debounced flushing for index, graph, and summary writes
+   - Auto-migrates stale index formats on load (INDEX_VERSION gated)
 
-5. **Summary** (`lib/summary.js`) generates bounded markdown summaries (clamped to ~2200 chars)
-   - Includes: health metrics, module types, dependency hotspots, entry points, recent git changes
+5. **Summary** (`lib/summary.js`) generates bounded markdown summaries (~2200 chars max)
+   - Health metrics, module types, dependency hotspots, entry points, recent git changes
    - Emits `ALERT:` lines when resolution < 90% or index is stale
 
 6. **Retrieve** (`lib/retrieve.js`) provides ranked search combining text search with graph reranking
-   - Backends: rg (default) or Zoekt (optional, auto-detected)
-   - Reranking: entry point boost, hotspot/fan-in boost, test/vendor penalties, symbol-aware scoring
-   - Graph boosts are gated when resolution < 90%
+   - **Scoring** (`lib/scoring.js`): symbol-aware signals — exact match (+40%), definition-site priority (+25%), noise penalty, CommonJS/Python pattern recognition
+   - **rg backend** (`lib/rg.js`): two-phase collection — source files first, then docs/config. Prevents changelog saturation for common terms
+   - **Fan-in suppression**: halves graph boost on hub files when a definition match exists in the result set
+   - **Health gating**: graph boosts disabled when resolution < 90%
 
 ### Injection into Claude Code
 
-Two hooks wire the system into Claude Code sessions (configured in `.claude/settings.json`):
+Two hooks (configured in `.claude/settings.json`):
 - **SessionStart**: `codebase-intel hook sessionstart` — injects summary on session start/resume
-- **UserPromptSubmit**: `node tools/codebase_intel/refresh.js` — re-injects if summary changed (per-session dedupe via SHA-256 hash files)
-
-Both emit under the same `<codebase-intelligence>` XML tag.
-
-### Watch Mode
-
-`watch.js` uses chokidar to watch for file changes, calling `intel.updateFile()` with debounced index/graph/summary flushes. Renders a live terminal dashboard when TTY is available.
+- **UserPromptSubmit**: `node tools/codebase_intel/refresh.js` — re-injects if summary changed (per-session SHA-256 dedupe)
 
 ### Per-Repo State
 
 All state lives in `.planning/intel/` (never committed):
 - `graph.db` — SQLite dependency graph
-- `index.json` — file metadata and import/export records
+- `index.json` — file metadata and import/export records (INDEX_VERSION 2)
 - `summary.md` — the injected summary
 - `history.json` — health snapshots for sparkline trends
 - `.last_injected_hash.*` — per-session dedupe hashes
 
 ## Key Design Decisions
 
-- **Health-gated ranking**: Graph-based reranking (fan-in boosts, hotspot detection) is disabled when import resolution drops below 90%. This prevents bad graph data from amplifying wrong results.
-- **Debounced writes**: Index, graph, and summary writes use independent debounce timers to batch rapid file changes during watch mode.
-- **Queue serialization**: All operations on a root are serialized through a promise chain (`withQueue`) to prevent concurrent SQLite access.
-- **Scope context**: `scope-finder.js` provides function/class-level context for search hits. Python uses AST (via `python_ast.py`), JS/TS uses heuristic brace-pairing with comment/string/regex masking.
-- **Summary is clamped**: Output is hard-capped at ~2200 chars to stay within useful context budget.
-- **Per-repo config**: `.codebase-intel.json` at repo root overrides default globs, ignore patterns, and summary throttle interval.
+- **Health-gated ranking**: graph reranking disabled when import resolution drops below 90%
+- **Definition over hub**: scoring prioritizes files that define a symbol over files that merely import it — fan-in suppression + definition-site priority signals
+- **Source-first search**: rg searches source files before docs/config to prevent changelog saturation on common terms
+- **Auto-migration**: stale index entries (v1 format) are detected and re-extracted transparently on load
+- **Debounced writes**: index, graph, and summary use independent debounce timers during watch mode
+- **Queue serialization**: all operations on a root are serialized through a promise chain to prevent concurrent SQLite access
+- **Summary is clamped**: hard-capped at ~2200 chars to stay within useful context budget
+- **Per-repo config**: `.codebase-intel.json` at repo root overrides default globs, ignore patterns, and summary throttle interval
