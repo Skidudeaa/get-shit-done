@@ -8,10 +8,15 @@ const viz = require("./lib/terminal-viz");
 // WHY: Heartbeat file lets hooks detect whether the watcher is running.
 // Written on start and after each flush.  Hooks read the mtime to
 // determine watcher status (alive if < 60s old, stale otherwise).
-function writeHeartbeat(root) {
+function writeHeartbeat(root, lastFile) {
   try {
-    const p = path.join(root, ".planning", "intel", ".watcher_heartbeat");
-    fs.writeFileSync(p, new Date().toISOString() + "\n");
+    const dir = path.join(root, ".planning", "intel");
+    fs.writeFileSync(path.join(dir, ".watcher_heartbeat"), new Date().toISOString() + "\n");
+    // WHY: Persist last processed file so the status line can show what
+    // the watcher is actually doing — not git log, not guesses.
+    if (lastFile) {
+      fs.writeFileSync(path.join(dir, ".watcher_last_file"), lastFile + "\n");
+    }
   } catch {}
 }
 
@@ -186,7 +191,7 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
       }
       
       // Refresh health metrics + heartbeat after each flush
-      writeHeartbeat(root);
+      writeHeartbeat(root, dashState.lastUpdateFile);
       try {
         const h = await intel.health(root);
         dashState.resolutionPct = h.resolutionPct ?? h.metrics?.resolutionPct ?? null;
