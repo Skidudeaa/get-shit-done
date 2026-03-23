@@ -37,11 +37,11 @@
       "id": "sym-004",
       "category": "symbol",
       "query": "isEntryPoint",
-      "relevantFiles": ["lib/retrieve.js", "lib/summary.js"],
+      "relevantFiles": ["lib/utils.js", "lib/retrieve.js", "lib/summary.js"],
       "relevantHitPatterns": ["function isEntryPoint"],
       "topK": 5,
       "minUsefulnessScore": 0.6,
-      "notes": "Function defined in multiple files. Tests breadth of symbol retrieval."
+      "notes": "Defined in utils.js, used in retrieve.js and summary.js. Tests breadth of symbol retrieval."
     },
     {
       "id": "sym-005",

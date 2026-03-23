@@ -53,6 +53,7 @@ function loadRepoConfig(root) {
       "**/node_modules/**",
       "**/.git/**",
       "**/.planning/**",
+      "**/.claude/**",
       "**/dist/**",
       "**/build/**",
       "**/.next/**",
