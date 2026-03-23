@@ -11,7 +11,42 @@ const viz = require("../lib/terminal-viz");
 // WHY: stderr goes to the user as visible hook output in Claude Code.
 // stdout goes to Claude as injected context.  The banner gives the user
 // visual confirmation that codebase-intel is active and what it sees.
-function renderBanner(healthData) {
+function getWatcherStatus(root) {
+  try {
+    const hbPath = path.join(root, ".planning", "intel", ".watcher_heartbeat");
+    if (!fs.existsSync(hbPath)) return { running: false };
+    const stat = fs.statSync(hbPath);
+    const ageSec = Math.floor((Date.now() - stat.mtimeMs) / 1000);
+    // Heartbeat older than 120s means watcher likely died
+    return { running: ageSec < 120, ageSec };
+  } catch {
+    return { running: false };
+  }
+}
+
+function getGitBranch(root) {
+  try {
+    const { execSync } = require("child_process");
+    return execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function getSearchBackend(root) {
+  const rg = require("../lib/rg");
+  const zoektMod = require("../lib/zoekt");
+  const parts = [];
+  if (rg.isInstalled()) parts.push("rg");
+  if (zoektMod.isInstalled()) {
+    parts.push(zoektMod.hasIndex(root) ? "zoekt (indexed)" : "zoekt");
+  }
+  return parts.length ? parts.join(" + ") : "none";
+}
+
+function renderBanner(healthData, root) {
   const m = healthData?.metrics || healthData || {};
   const resPct = m.resolutionPct ?? healthData?.resolutionPct ?? 0;
   const resolved = m.localResolved ?? healthData?.localResolved ?? 0;
@@ -25,17 +60,30 @@ function renderBanner(healthData) {
 
   // Health status
   const healthStatus = resPct >= 90 ? "ok" : resPct >= 70 ? "warn" : "error";
-  const healthLabel = resPct >= 90 ? "healthy" : resPct >= 70 ? "degraded" : "unhealthy";
   const graphLabel = resPct >= 90 ? viz.c("enabled", viz.colors.green) : viz.c("gated", viz.colors.yellow);
 
+  // Watcher status
+  const watcher = getWatcherStatus(root);
+  const watcherLabel = watcher.running
+    ? viz.c("running", viz.colors.green) + viz.dim(" (" + viz.formatAge(watcher.ageSec) + " ago)")
+    : viz.c("off", viz.colors.yellow);
+
+  // Git branch
+  const branch = getGitBranch(root);
+  const branchLabel = branch ? viz.c(branch, viz.colors.magenta) : viz.dim("n/a");
+
+  // Search backend
+  const searchLabel = viz.dim(getSearchBackend(root));
+
   const lines = [
-    viz.c("codebase-intel", viz.colors.bold, viz.colors.cyan) + "  " + viz.dim("v0.1.0"),
+    viz.c("codebase-intel", viz.colors.bold, viz.colors.cyan) + "  " + viz.dim("v0.1.0") + "  " + viz.dim("branch:") + branchLabel,
     "",
     viz.status(healthStatus, `resolution ${resPct}% (${resolved}/${total})  `) + viz.bar(resPct, 15, { showPercent: false }),
     viz.dim(`  files: ${files}  graph: ${graphFiles} nodes  boosts: `) + graphLabel + viz.dim(`  age: `) + viz.ageStatus(ageSec),
+    viz.dim(`  watcher: `) + watcherLabel + viz.dim(`  search: `) + searchLabel,
   ];
 
-  // Hotspots (from summary if available, otherwise from graph data)
+  // Hotspots
   if (hotspots.length > 0) {
     lines.push("");
     lines.push(viz.c("  hotspots", viz.colors.dim) + "  " + hotspots.slice(0, 4).map(h =>
@@ -51,16 +99,18 @@ function renderBanner(healthData) {
   return viz.box(lines, { title: viz.c("◆", viz.colors.cyan) });
 }
 
-function renderStatusLine(healthData, changed) {
+function renderStatusLine(healthData, changed, root) {
   const m = healthData?.metrics || healthData || {};
   const resPct = m.resolutionPct ?? healthData?.resolutionPct ?? 0;
   const files = m.indexedFiles ?? 0;
   const ageSec = m.indexAgeSec ?? 0;
 
   const healthIcon = resPct >= 90 ? viz.c("◆", viz.colors.green) : resPct >= 70 ? viz.c("◆", viz.colors.yellow) : viz.c("◆", viz.colors.red);
-  const changeNote = changed ? viz.c(" (updated)", viz.colors.cyan) : "";
+  const watcher = getWatcherStatus(root);
+  const watchIcon = watcher.running ? viz.c("⟳", viz.colors.green) : viz.c("⏸", viz.colors.yellow);
+  const changeNote = changed ? viz.c(" ↻ context refreshed", viz.colors.cyan) : "";
 
-  return `${healthIcon} ${viz.dim("intel")} ${resPct}% ${viz.dim(files + " files")} ${viz.ageStatus(ageSec)}${changeNote}`;
+  return `${healthIcon} ${viz.dim("intel")} ${resPct}% ${viz.dim(files + " files")} ${watchIcon} ${viz.ageStatus(ageSec)}${changeNote}`;
 }
 
 function flag(argv, name) {
@@ -213,7 +263,7 @@ Usage:
         hotspots.push({ path: hm[1], fanIn: parseInt(hm[2], 10) });
       }
       if (health.metrics) health.metrics.hotspots = hotspots;
-      process.stderr.write(renderBanner(health) + "\n");
+      process.stderr.write(renderBanner(health, root) + "\n");
     } catch {}
 
     process.exit(0);
@@ -265,7 +315,7 @@ Usage:
     // stderr → status line visible to user on every prompt
     try {
       const health = await intel.health(root);
-      process.stderr.write(renderStatusLine(health, changed) + "\n");
+      process.stderr.write(renderStatusLine(health, changed, root) + "\n");
     } catch {}
 
     if (!changed) process.exit(0);

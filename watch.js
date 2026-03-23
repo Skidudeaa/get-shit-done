@@ -5,6 +5,23 @@ const fs = require("fs");
 const intel = require("./lib/intel");
 const viz = require("./lib/terminal-viz");
 
+// WHY: Heartbeat file lets hooks detect whether the watcher is running.
+// Written on start and after each flush.  Hooks read the mtime to
+// determine watcher status (alive if < 60s old, stale otherwise).
+function writeHeartbeat(root) {
+  try {
+    const p = path.join(root, ".planning", "intel", ".watcher_heartbeat");
+    fs.writeFileSync(p, new Date().toISOString() + "\n");
+  } catch {}
+}
+
+function clearHeartbeat(root) {
+  try {
+    const p = path.join(root, ".planning", "intel", ".watcher_heartbeat");
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch {}
+}
+
 function debounce(fn, ms) {
   let t = null;
   return (...args) => {
@@ -123,7 +140,8 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
     );
 
     await intel.init(root);
-    
+    writeHeartbeat(root);
+
     // Initialize dashboard state
     const dashState = createDashboardState(root);
     dashboardStates.push(dashState);
@@ -163,7 +181,8 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
         }
       }
       
-      // Refresh health metrics periodically
+      // Refresh health metrics + heartbeat after each flush
+      writeHeartbeat(root);
       try {
         const h = await intel.health(root);
         dashState.resolutionPct = h.resolutionPct ?? h.metrics?.resolutionPct ?? null;
@@ -238,6 +257,7 @@ async function watchRoots(roots, { loadRepoConfig, summaryEverySecOverride = nul
         await w.close();
       } catch {}
     }
+    for (const r of roots) clearHeartbeat(r);
     process.exit(0);
   };
 
