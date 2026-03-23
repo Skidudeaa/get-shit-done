@@ -6,6 +6,62 @@ const path = require("path");
 const intel = require("../lib/intel");
 const { retrieve } = require("../lib/retrieve");
 const zoekt = require("../lib/zoekt");
+const viz = require("../lib/terminal-viz");
+
+// WHY: stderr goes to the user as visible hook output in Claude Code.
+// stdout goes to Claude as injected context.  The banner gives the user
+// visual confirmation that codebase-intel is active and what it sees.
+function renderBanner(healthData) {
+  const m = healthData?.metrics || healthData || {};
+  const resPct = m.resolutionPct ?? healthData?.resolutionPct ?? 0;
+  const resolved = m.localResolved ?? healthData?.localResolved ?? 0;
+  const total = m.localTotal ?? healthData?.localTotal ?? 0;
+  const files = m.indexedFiles ?? 0;
+  const ageSec = m.indexAgeSec ?? 0;
+  const graphFiles = m.graph?.files ?? 0;
+
+  const hotspots = m.hotspots || [];
+  const topMisses = m.topMisses ?? healthData?.topMisses ?? [];
+
+  // Health status
+  const healthStatus = resPct >= 90 ? "ok" : resPct >= 70 ? "warn" : "error";
+  const healthLabel = resPct >= 90 ? "healthy" : resPct >= 70 ? "degraded" : "unhealthy";
+  const graphLabel = resPct >= 90 ? viz.c("enabled", viz.colors.green) : viz.c("gated", viz.colors.yellow);
+
+  const lines = [
+    viz.c("codebase-intel", viz.colors.bold, viz.colors.cyan) + "  " + viz.dim("v0.1.0"),
+    "",
+    viz.status(healthStatus, `resolution ${resPct}% (${resolved}/${total})  `) + viz.bar(resPct, 15, { showPercent: false }),
+    viz.dim(`  files: ${files}  graph: ${graphFiles} nodes  boosts: `) + graphLabel + viz.dim(`  age: `) + viz.ageStatus(ageSec),
+  ];
+
+  // Hotspots (from summary if available, otherwise from graph data)
+  if (hotspots.length > 0) {
+    lines.push("");
+    lines.push(viz.c("  hotspots", viz.colors.dim) + "  " + hotspots.slice(0, 4).map(h =>
+      viz.c(h.path || h, viz.colors.white) + viz.dim("(" + (h.fanIn || "?") + ")")
+    ).join("  "));
+  }
+
+  // Top unresolved (only if health is bad)
+  if (resPct < 90 && topMisses.length > 0) {
+    lines.push(viz.dim("  misses  ") + topMisses.slice(0, 3).map(m => viz.c(m[0], viz.colors.yellow)).join(", "));
+  }
+
+  return viz.box(lines, { title: viz.c("◆", viz.colors.cyan) });
+}
+
+function renderStatusLine(healthData, changed) {
+  const m = healthData?.metrics || healthData || {};
+  const resPct = m.resolutionPct ?? healthData?.resolutionPct ?? 0;
+  const files = m.indexedFiles ?? 0;
+  const ageSec = m.indexAgeSec ?? 0;
+
+  const healthIcon = resPct >= 90 ? viz.c("◆", viz.colors.green) : resPct >= 70 ? viz.c("◆", viz.colors.yellow) : viz.c("◆", viz.colors.red);
+  const changeNote = changed ? viz.c(" (updated)", viz.colors.cyan) : "";
+
+  return `${healthIcon} ${viz.dim("intel")} ${resPct}% ${viz.dim(files + " files")} ${viz.ageStatus(ageSec)}${changeNote}`;
+}
 
 function flag(argv, name) {
   const i = argv.indexOf(name);
@@ -141,9 +197,25 @@ Usage:
     const summary = intel.readSummary(root);
     if (!summary || !summary.trim()) process.exit(0);
 
+    // stdout → Claude context
     process.stdout.write(
       `<codebase-intelligence>\n${summary.trim()}\n</codebase-intelligence>`
     );
+
+    // stderr → visible to user in terminal
+    try {
+      const health = await intel.health(root);
+      // Enrich with hotspot names from summary
+      const hotspotRe = /`([^`]+)`[:\s]+(\d+)/g;
+      const hotspots = [];
+      let hm;
+      while ((hm = hotspotRe.exec(summary)) !== null) {
+        hotspots.push({ path: hm[1], fanIn: parseInt(hm[2], 10) });
+      }
+      if (health.metrics) health.metrics.hotspots = hotspots;
+      process.stderr.write(renderBanner(health) + "\n");
+    } catch {}
+
     process.exit(0);
   }
 
@@ -188,11 +260,19 @@ Usage:
       : "";
 
     // Only inject if changed since last injection for this session
-    if (last === h) process.exit(0);
+    const changed = last !== h;
+
+    // stderr → status line visible to user on every prompt
+    try {
+      const health = await intel.health(root);
+      process.stderr.write(renderStatusLine(health, changed) + "\n");
+    } catch {}
+
+    if (!changed) process.exit(0);
 
     fs.writeFileSync(cachePath, h);
 
-    // Use same tag as SessionStart for consistency
+    // stdout → Claude context (only when changed)
     process.stdout.write(
       `<codebase-intelligence>\n(refreshed: ${new Date().toISOString()})\n${summary}\n</codebase-intelligence>`
     );
